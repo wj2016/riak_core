@@ -106,8 +106,9 @@
                 negotiated :: [{capability(), mode()}]
                }).
 
+-include("riak_core.hrl").
+
 -define(ETS, riak_capability_ets).
--define(CAPS, '$riak_capabilities').
 
 %%%===================================================================
 %%% API

@@ -21,6 +21,7 @@
 -module(riak_core_claimant).
 -behaviour(gen_server).
 
+-include("riak_core.hrl").
 -include("riak_core_bucket_type.hrl").
 
 %% API
@@ -1165,17 +1166,49 @@ do_claimant(Node, CState, Replacing, Seed, Log) ->
 %% @private
 maybe_update_claimant(Node, CState) ->
     Members = riak_core_ring:members(CState, [valid, leaving]),
-    Claimant = riak_core_ring:claimant(CState),
-    NextClaimant = hd(Members ++ [undefined]),
-    ClaimantMissing = not lists:member(Claimant, Members),
 
+    %% Compute preferred members vs. normal members for choosing who the
+    %% claimant should be; preferred members are members of the cluster
+    %% who know about the `required_bprops` property, used to enfoce
+    %% cluster-wise knowledge of a capability before switching to it.
+    %%
+    Preferred = lists:filter(fun(N) ->
+                Caps = riak_core_ring:get_member_meta(CState, N, ?CAPS),
+                lists:keymember({riak_core, required_bprops}, 1, Caps)
+            end, Members),
+
+    %% Select the next claimaint from the preferred list, else default
+    %% to the remaining members in the ring.
+    %%
+    Claimant = riak_core_ring:claimant(CState),
+    ClaimantMissing = not lists:member(Claimant, Members),
+    NextClaimant = case hd(Preferred ++ [undefined]) of
+        undefined ->
+            {normal, hd(Members ++ [undefined])};
+        X ->
+            {preferred, X}
+    end,
+
+    %% If the next claimant is chosen, it's us, and there is no current
+    %% claimant, become the claimant.
     case {ClaimantMissing, NextClaimant} of
-        {true, Node} ->
+        {true, {_, Node}} ->
             %% Become claimant
+            lager:info("becoming claimant; claimant: ~p", [Claimant]),
+            CState2 = riak_core_ring:set_claimant(CState, Node),
+            CState3 = riak_core_ring:increment_ring_version(Claimant, CState2),
+            {true, CState3};
+        {false, {preferred, Node}} when NextClaimant =/= Claimant ->
+            %% If the next claimant is a preferred claimant, and it's
+            %% us, become the preferred claimant; therefore, even if
+            %% there is a current claimant, if a preferred choice is
+            %% available, ensure we promote ourselves.
+            lager:info("becoming claimant; claimant: ~p", [Claimant]),
             CState2 = riak_core_ring:set_claimant(CState, Node),
             CState3 = riak_core_ring:increment_ring_version(Claimant, CState2),
             {true, CState3};
         _ ->
+            %% Otherwise, do nothing.
             {false, CState}
     end.
 

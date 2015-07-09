@@ -5,3 +5,5 @@
 -type riak_core_dict() :: dict().
 -type riak_core_set() :: set().
 -endif.
+
+-define(CAPS, '$riak_capabilities').

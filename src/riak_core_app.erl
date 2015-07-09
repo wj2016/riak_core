@@ -101,6 +101,11 @@ start(_StartType, _StartArgs) ->
                                           [true, false],
                                           false),
 
+            %% TODO: This property needs to be in Riak KV.
+            riak_core_capability:register({riak_core, required_bprops},
+                                          [[write_once], []],
+                                          []),
+
             riak_core_cli_registry:load_schema(),
             riak_core_cli_registry:register_node_finder(),
             riak_core_cli_registry:register_cli(),

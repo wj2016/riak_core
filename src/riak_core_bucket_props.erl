@@ -42,7 +42,8 @@ merge(Overriding, Other) ->
 validate(CreateOrUpdate, Bucket, ExistingProps, BucketProps) ->
     ReservedErrors = validate_reserved_names(Bucket),
     CoreErrors = validate_core_props(CreateOrUpdate, Bucket, ExistingProps, BucketProps),
-    validate(CreateOrUpdate, Bucket, ExistingProps, BucketProps, riak_core:bucket_validators(), [ReservedErrors, CoreErrors]).
+    RequiredErrors = validate_required_props(CreateOrUpdate, Bucket, ExistingProps, BucketProps),
+    validate(CreateOrUpdate, Bucket, ExistingProps, BucketProps, riak_core:bucket_validators(), [ReservedErrors, CoreErrors, RequiredErrors]).
 
 validate(_CreateOrUpdate, _Bucket, _ExistingProps, Props, [], ErrorLists) ->
     case lists:flatten(ErrorLists) of
@@ -91,6 +92,28 @@ validate_core_prop(_, {_Bucket, _}, _Existing, {active, _}) ->
     %% by riak_core_claimant)
     {active, "Cannot modify active property"};
 validate_core_prop(_, _, _, _) ->
+    %% all other properties are valid from the perspective of riak_core
+    true.
+
+validate_required_props(CreateOrUpdate, Bucket, ExistingProps, BucketProps) ->
+    lists:foldl(fun(Prop, Errors) ->
+                        case validate_required_prop(CreateOrUpdate, Bucket, ExistingProps, Prop) of
+                            true ->  Errors;
+                            Error -> [Error | Errors]
+                        end
+                end, [], BucketProps).
+
+%% @TODO: This code needs to look at the required bprops for all: riak_core, riak_kv, and riak_repl.
+validate_required_prop(create, {_Bucket, undefined}, undefined, {Attribute, _Value}) ->
+    RequiredBProps = riak_core_capability:get({riak_core, required_bprops}),
+    DefaultBProps = [A || {A, _} <- riak_core_bucket_type:defaults()],
+    case lists:member(Attribute, RequiredBProps ++ DefaultBProps) of
+        true ->
+            true;
+        false ->
+            {attribute, "The " ++ atom_to_list(Attribute) ++ " property is not available."}
+    end;
+validate_required_prop(_, _, _, _) ->
     %% all other properties are valid from the perspective of riak_core
     true.
 
