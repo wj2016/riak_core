@@ -316,7 +316,7 @@ reconcile(Ring0, [OtherRing0]) ->
     {Ring, OtherRing} = riak_core_ring:reconcile_names(Ring0, OtherRing0),
     Node = node(),
     OtherNode = riak_core_ring:owner_node(OtherRing),
-    Members = riak_core_ring:reconcile_members(Ring, OtherRing),
+    Members = riak_core_ring:reconcile_members(Node, Ring, OtherRing),
     WrongCluster = (riak_core_ring:cluster_name(Ring) /=
                     riak_core_ring:cluster_name(OtherRing)),
     PreStatus = riak_core_ring:member_status(Members, OtherNode),
