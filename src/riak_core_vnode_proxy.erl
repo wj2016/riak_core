@@ -242,15 +242,12 @@ handle_proxy(Msg, State=#state{check_counter=Counter,
             {_, L} =
                 erlang:process_info(Pid, message_queue_len),
             Counter3 = 0,
-            Mailbox2 = L,
-            RequestState2 = case RequestState of
-                                sent ->
-                                    %% Ignore pending ping response as it is
-                                    %% no longer valid nor useful.
-                                    ignore;
-                                _ ->
-                                    RequestState
-                            end;
+            Mailbox2 = L + 1,
+            %% Send a new proxy ping so that if the new length is above the
+            %% threshold then the proxy will detect the work is completed,
+            %% rather than being stuck in overload state until the interval
+            %% counts are reached.
+            RequestState2 = send_proxy_ping(Pid, Mailbox2);
         _ ->
             Counter3 = Counter2,
             Mailbox2 = Mailbox + 1,
@@ -367,8 +364,8 @@ overload_test_() ->
                        VnodePid ! {get_count, self()},
                        receive
                            {count, Count} ->
-                               %% 50000 messages + 1 unanswered vnode_proxy_ping
-                               ?assertEqual(50001, Count)
+                               %% 50000 messages + 11 unanswered vnode_proxy_ping
+                               ?assertEqual(50011, Count)
                        end
                end
               }
@@ -385,8 +382,8 @@ overload_test_() ->
                        VnodePid ! {get_count, self()},
                        receive
                            {count, Count} ->
-                               %% Threshold + 1 unanswered vnode_proxy_ping
-                               ?assertEqual(?DEFAULT_OVERLOAD_THRESHOLD + 1, Count)
+                               %% Threshold + 10 unanswered vnode_proxy_ping
+                               ?assertEqual(?DEFAULT_OVERLOAD_THRESHOLD + 10, Count)
                        end
                end
               }
@@ -403,8 +400,9 @@ overload_test_() ->
                        %% reasonable
                        {message_queue_len, L} =
                            erlang:process_info(VnodePid, message_queue_len),
-                       %% Threshold + 1 unanswered vnode_proxy_ping
-                       ?assert(L =< (?DEFAULT_OVERLOAD_THRESHOLD + 1))
+                       %% Threshold + 2 unanswered vnode_proxy_ping (one
+                       %% for first ping, second after process_info check)
+                       ?assert(L =< (?DEFAULT_OVERLOAD_THRESHOLD + 2))
                end
               }
       end
