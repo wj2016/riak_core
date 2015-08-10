@@ -36,7 +36,7 @@
                 check_counter          :: non_neg_integer(),
                 check_interval         :: pos_integer(),
                 check_request_interval :: non_neg_integer(),
-                check_request          :: undefined | sent | ignore
+                check_request          :: undefined | reference()
                }).
 
 -define(DEFAULT_CHECK_INTERVAL, 5000).
@@ -168,13 +168,43 @@ handle_cast({unregister_vnode, Pid}, State) ->
     NewState = forget_vnode(State),
     {noreply, NewState};
 handle_cast({vnode_proxy_pong, Ref, Msgs}, State=#state{check_request=RequestState,
-                                                        check_mailbox=Mailbox}) ->
+                                                        check_mailbox=Mailbox,
+                                                        check_request_interval=RequestInterval,
+                                                        check_threshold=Threshold}) ->
     NewState = case Ref of
                    RequestState ->
-                       State#state{check_mailbox=Mailbox - Msgs,
-                                   check_request=undefined,
-                                   check_counter=0};
-                   _ ->
+                       Mailbox2 = Mailbox - Msgs,
+                       case Mailbox2 > (Threshold - RequestInterval) of
+                           true ->
+                               %% If vnode proxy may arrive in overload by the
+                               %% time the next ping is issued (or is already),
+                               %% immediately send a new ping to make sure
+                               %% there is a message in the vnode mailbox that
+                               %% will clear the overload and leave
+                               %% the proxy in a state that will do a direct
+                               %% process check if the response is not
+                               %% received in time.
+                               %%
+                               %% Skip the check_counter to RequestInterval
+                               %% so an additional request is not sent in
+                               %% handle_proxy which would cause
+                               %% the response to this pong to be ignored.
+                               %% If we do a hard check, that is more
+                               %% up to date so it is correct to use that
+                               %% instead.
+                               {Pid, State2} = get_vnode_pid(State),
+                               RequestState2 = send_proxy_ping(Pid, Mailbox2 + 1),
+                               State2#state{check_mailbox=Mailbox2,
+                                            check_request=RequestState2,
+                                            check_counter=RequestInterval};
+                           false ->
+                               %% Otherwise, reset counters to zero
+                               %% and issue the ping at the next interval
+                               State#state{check_mailbox=Mailbox2,
+                                           check_request=undefined,
+                                           check_counter=0}
+                       end;
+                   _IgnoredRequest ->
                        State
                end,
     {noreply, NewState};
