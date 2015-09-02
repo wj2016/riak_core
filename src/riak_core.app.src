@@ -22,7 +22,6 @@
                   poolboy,
                   exometer_core,
                   clique,
-                  cluster_info,
                   folsom,
                   runtime_tools
                  ]},
