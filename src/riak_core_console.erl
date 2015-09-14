@@ -1331,6 +1331,19 @@ stat_reset(Arg) ->
 		 || {N, _, _} <- Entries]
 	end, find_entries(Arg, enabled)).
 
+log_security_event(success, User, Command, Args) ->
+    security:info("Succesful security command issued by user ~p with command: riak-admin security ~p ~p.",
+        [User, Command, Args]);
+log_security_event(failed, User, Command, Args) ->
+    security:error("Failed security command issued by user ~p with command: riak-admin security ~p ~p.",
+        [User, Command, Args]).
+log_operations_command(User, Script, Command) ->
+    operations:info("User ~p issued command: ~p ~p ~p.",
+        [User, Script, Command]).
+log_operations_command(User, Script, Command, Args) ->
+    operations:info("User ~p issued command: ~p ~p ~p.",
+        [User, Script, Command, Args]).
+
 change_status(N, St) ->
     case exometer:setopts(N, [{status, St}]) of
 	ok ->
