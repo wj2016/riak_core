@@ -1,27 +1,23 @@
-DIALYZER_APPS = kernel stdlib sasl erts ssl tools os_mon runtime_tools crypto inets \
-	public_key mnesia syntax_tools compiler
-PULSE_TESTS = worker_pool_pulse
+PROJECT = riak_core
 
-.PHONY: deps test
+COMPILE_FIRST = riak_core_broadcast_handler.erl riak_core_gen_server.erl
 
-all: deps compile
+DEPS = lager poolboy basho_stats riak_sysmon riak_ensemble pbkdf2 eleveldb exometer_core clique folsom
 
-compile: deps
-	./rebar compile
+dep_lager= git git://github.com/basho/lager.git 2.2.0
+dep_poolboy= git git://github.com/basho/poolboy.git 0.8.1p3
+dep_basho_stats= git git://github.com/basho/basho_stats.git 1.0.3
+dep_riak_sysmon= git git://github.com/basho/riak_sysmon.git th/correct-dependencies
+dep_riak_ensemble= git git://github.com/basho/riak_ensemble.git th/dynamic-start
+dep_pbkdf2= git git://github.com/basho/erlang-pbkdf2.git 2.0.0
+dep_eleveldb= git git://github.com/basho/eleveldb.git th/correct-dependencies
+dep_exometer_core= git git://github.com/basho/exometer_core.git th/correct-dependencies
+dep_clique= git git://github.com/basho/clique.git RIAK-2125/correct-dependencies
+dep_folsom= git git://github.com/basho/folsom.git 0.7.4p5
 
-deps:
-	./rebar get-deps
 
-clean:
-	./rebar clean
+include erlang.mk
 
-distclean: clean
-	./rebar delete-deps
+#COMPILE_FIRST += gen_nb_server.erl riak_core_gen_server.erl riak_core_stat_xform
 
-# You should 'clean' before your first run of this target
-# so that deps get built with PULSE where needed.
-pulse:
-	./rebar compile -D PULSE
-	./rebar eunit -D PULSE skip_deps=true suite=$(PULSE_TESTS)
-
-include tools.mk
+ERLC_OPTS := $(filter-out -Werror,$(ERLC_OPTS))
