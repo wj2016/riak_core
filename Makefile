@@ -7,12 +7,17 @@ DEPS = lager poolboy basho_stats riak_sysmon riak_ensemble pbkdf2 eleveldb exome
 dep_lager= git git://github.com/basho/lager.git 2.2.0
 dep_poolboy= git git://github.com/basho/poolboy.git 0.8.1p3
 dep_basho_stats= git git://github.com/basho/basho_stats.git 1.0.3
-dep_riak_sysmon= git git://github.com/basho/riak_sysmon.git th/correct-dependencies
-dep_riak_ensemble= git git://github.com/basho/riak_ensemble.git th/dynamic-start
+#dep_riak_sysmon= git git://github.com/basho/riak_sysmon.git th/correct-dependencies
+dep_riak_sysmon= git git://github.com/basho/riak_sysmon.git develop
+#dep_riak_ensemble= git git://github.com/basho/riak_ensemble.git th/dynamic-start
+dep_riak_ensemble= git git://github.com/basho/riak_ensemble.git develop
 dep_pbkdf2= git git://github.com/basho/erlang-pbkdf2.git 2.0.0
-dep_eleveldb= git git://github.com/basho/eleveldb.git th/correct-dependencies
-dep_exometer_core= git git://github.com/basho/exometer_core.git th/correct-dependencies
-dep_clique= git git://github.com/basho/clique.git RIAK-2125/correct-dependencies
+#dep_eleveldb= git git://github.com/basho/eleveldb.git th/correct-dependencies
+dep_eleveldb= git git://github.com/basho/eleveldb.git 2.1.0
+#dep_exometer_core= git git://github.com/basho/exometer_core.git th/correct-dependencies
+dep_exometer_core= git git://github.com/basho/exometer_core.git 1.0.0-basho2
+#dep_clique= git git://github.com/basho/clique.git RIAK-2125/correct-dependencies
+dep_clique= git git://github.com/basho/clique.git 0.3.2
 dep_folsom= git git://github.com/basho/folsom.git 0.7.4p5
 
 
