@@ -16,7 +16,7 @@
 
 ERLANG_MK_FILENAME := $(realpath $(lastword $(MAKEFILE_LIST)))
 
-ERLANG_MK_VERSION = 1.2.0-642-gccd2b9f
+ERLANG_MK_VERSION = 1.2.0-734-g127426e
 
 # Core configuration.
 
@@ -45,7 +45,6 @@ export ERLANG_MK_TMP
 ERL = erl +A0 -noinput -boot start_clean
 
 # Platform detection.
-# @todo Add Windows/Cygwin detection eventually.
 
 ifeq ($(PLATFORM),)
 UNAME_S := $(shell uname -s)
@@ -64,6 +63,10 @@ else ifeq ($(UNAME_S),NetBSD)
 PLATFORM = netbsd
 else ifeq ($(UNAME_S),OpenBSD)
 PLATFORM = openbsd
+else ifeq ($(UNAME_S),DragonFly)
+PLATFORM = dragonfly
+else ifeq ($(shell uname -o),Msys)
+PLATFORM = msys2
 else
 $(error Unable to detect platform. Please open a ticket with the output of uname -a.)
 endif
@@ -73,13 +76,9 @@ endif
 
 # Core targets.
 
-ifneq ($(words $(MAKECMDGOALS)),1)
 .NOTPARALLEL:
-endif
 
-all:: deps
-	$(verbose) $(MAKE) --no-print-directory app
-	$(verbose) $(MAKE) --no-print-directory rel
+all:: deps app rel
 
 # Noop to avoid a Make warning when there's nothing to do.
 rel::
@@ -94,14 +93,17 @@ ifneq ($(wildcard erl_crash.dump),)
 	$(gen_verbose) rm -f erl_crash.dump
 endif
 
-distclean:: clean
+distclean:: clean distclean-tmp
+
+distclean-tmp:
+	$(gen_verbose) rm -rf $(ERLANG_MK_TMP)
 
 help::
 	$(verbose) printf "%s\n" \
 		"erlang.mk (version $(ERLANG_MK_VERSION)) is distributed under the terms of the ISC License." \
 		"Copyright (c) 2013-2015 Loïc Hoguin <essen@ninenines.eu>" \
 		"" \
-		"Usage: [V=1] $(MAKE) [-jNUM] [target]..." \
+		"Usage: [V=1] $(MAKE) [target]..." \
 		"" \
 		"Core targets:" \
 		"  all           Run deps, app and rel targets in that order" \
@@ -136,8 +138,14 @@ endef
 
 # Adding erlang.mk to make Erlang scripts who call init:get_plain_arguments() happy.
 define erlang
-$(ERL) -pz $(ERLANG_MK_TMP)/rebar/ebin -eval "$(subst $(newline),,$(subst ",\",$(1)))" -- erlang.mk
+$(ERL) $(2) -pz $(ERLANG_MK_TMP)/rebar/ebin -eval "$(subst $(newline),,$(subst ",\",$(1)))" -- erlang.mk
 endef
+
+ifeq ($(PLATFORM),msys2)
+core_native_path = $(subst \,\\\\,$(shell cygpath -w $1))
+else
+core_native_path = $1
+endif
 
 ifeq ($(shell which wget 2>/dev/null | wc -l), 1)
 define core_http_get
@@ -160,13 +168,13 @@ define core_http_get.erl
 endef
 
 define core_http_get
-	$(call erlang,$(call core_http_get.erl,$(1),$(2)))
+	$(call erlang,$(call core_http_get.erl,$(call core_native_path,$1),$2))
 endef
 endif
 
 core_eq = $(and $(findstring $(1),$(2)),$(findstring $(2),$(1)))
 
-core_find = $(foreach d,$(call core_ls,$1*),$(call core_find,$d/,$2) $(filter $(subst *,%,$2),$d))
+core_find = $(if $(wildcard $1),$(shell find $1 -type f -name $(subst *,\*,$2)))
 
 core_lc = $(subst A,a,$(subst B,b,$(subst C,c,$(subst D,d,$(subst E,e,$(subst F,f,$(subst G,g,$(subst H,h,$(subst I,i,$(subst J,j,$(subst K,k,$(subst L,l,$(subst M,m,$(subst N,n,$(subst O,o,$(subst P,p,$(subst Q,q,$(subst R,r,$(subst S,s,$(subst T,t,$(subst U,u,$(subst V,v,$(subst W,w,$(subst X,x,$(subst Y,y,$(subst Z,z,$(1)))))))))))))))))))))))))))
 
@@ -175,13 +183,15 @@ core_ls = $(filter-out $(1),$(shell echo $(1)))
 
 # Automated update.
 
+ERLANG_MK_REPO ?= https://github.com/ninenines/erlang.mk
+ERLANG_MK_COMMIT ?=
 ERLANG_MK_BUILD_CONFIG ?= build.config
 ERLANG_MK_BUILD_DIR ?= .erlang.mk.build
 
 erlang-mk:
-	git clone https://github.com/ninenines/erlang.mk $(ERLANG_MK_BUILD_DIR)
-	if [ -f $(ERLANG_MK_BUILD_CONFIG) ]; then cp $(ERLANG_MK_BUILD_CONFIG) $(ERLANG_MK_BUILD_DIR); fi
-	cd $(ERLANG_MK_BUILD_DIR) && $(MAKE)
+	git clone $(ERLANG_MK_REPO) $(ERLANG_MK_BUILD_DIR)
+	if [ -f $(ERLANG_MK_BUILD_CONFIG) ]; then cp $(ERLANG_MK_BUILD_CONFIG) $(ERLANG_MK_BUILD_DIR)/build.config; fi
+	cd $(ERLANG_MK_BUILD_DIR) && $(if $(ERLANG_MK_COMMIT),git checkout $(ERLANG_MK_COMMIT) &&) $(MAKE)
 	cp $(ERLANG_MK_BUILD_DIR)/erlang.mk ./erlang.mk
 	rm -rf $(ERLANG_MK_BUILD_DIR)
 
@@ -3140,6 +3150,14 @@ pkg_rfc4627_jsonrpc_fetch = git
 pkg_rfc4627_jsonrpc_repo = https://github.com/tonyg/erlang-rfc4627
 pkg_rfc4627_jsonrpc_commit = master
 
+PACKAGES += riak_control
+pkg_riak_control_name = riak_control
+pkg_riak_control_description = Webmachine-based administration interface for Riak.
+pkg_riak_control_homepage = https://github.com/basho/riak_control
+pkg_riak_control_fetch = git
+pkg_riak_control_repo = https://github.com/basho/riak_control
+pkg_riak_control_commit = master
+
 PACKAGES += riak_core
 pkg_riak_core_name = riak_core
 pkg_riak_core_description = Distributed systems infrastructure used by Riak.
@@ -4403,7 +4421,8 @@ define dep_autopatch_rebar.erl
 						end
 				end || P <- Plugins],
 				[RunPlugin(P, preprocess) || P <- Plugins],
-				[RunPlugin(P, pre_compile) || P <- Plugins]
+				[RunPlugin(P, pre_compile) || P <- Plugins],
+				[RunPlugin(P, compile) || P <- Plugins]
 		end
 	end(),
 	halt()
@@ -4542,6 +4561,21 @@ $(foreach dep,$(DEPS),$(eval $(call dep_target,$(dep))))
 distclean-deps:
 	$(gen_verbose) rm -rf $(DEPS_DIR)
 
+# External plugins.
+
+DEP_PLUGINS ?=
+
+define core_dep_plugin
+-include $(DEPS_DIR)/$(1)
+
+$(DEPS_DIR)/$(1): $(DEPS_DIR)/$(2) ;
+endef
+
+$(foreach p,$(DEP_PLUGINS),\
+	$(eval $(if $(findstring /,$p),\
+		$(call core_dep_plugin,$p,$(firstword $(subst /, ,$p))),\
+		$(call core_dep_plugin,$p/plugins.mk,$p))))
+
 # Copyright (c) 2015, Loïc Hoguin <essen@ninenines.eu>
 # This file is part of erlang.mk and subject to the terms of the ISC License.
 
@@ -4600,6 +4634,9 @@ app_verbose = $(app_verbose_$(V))
 appsrc_verbose_0 = @echo " APP   " $(PROJECT).app.src;
 appsrc_verbose = $(appsrc_verbose_$(V))
 
+makedep_verbose_0 = @echo " DEPEND" $(PROJECT).d;
+makedep_verbose = $(makedep_verbose_$(V))
+
 erlc_verbose_0 = @echo " ERLC  " $(filter-out $(patsubst %,%.erl,$(ERLC_EXCLUDE)),\
 	$(filter %.erl %.core,$(?F)));
 erlc_verbose = $(erlc_verbose_$(V))
@@ -4613,12 +4650,16 @@ asn1_verbose = $(asn1_verbose_$(V))
 mib_verbose_0 = @echo " MIB   " $(filter %.bin %.mib,$(?F));
 mib_verbose = $(mib_verbose_$(V))
 
+ifneq ($(wildcard src/),)
+
 # Targets.
 
 ifeq ($(wildcard ebin/test),)
-app:: app-build
+app:: $(PROJECT).d
+	$(verbose) $(MAKE) --no-print-directory app-build
 else
-app:: clean app-build
+app:: clean $(PROJECT).d
+	$(verbose) $(MAKE) --no-print-directory app-build
 endif
 
 ifeq ($(wildcard src/$(PROJECT)_app.erl),)
@@ -4646,9 +4687,129 @@ define app_file
 endef
 endif
 
-app-build: erlc-include ebin/$(PROJECT).app
+app-build: ebin/$(PROJECT).app
+	$(verbose) echo -n
+
+# Source files.
+
+ERL_FILES = $(sort $(call core_find,src/,*.erl))
+CORE_FILES = $(sort $(call core_find,src/,*.core))
+
+# ASN.1 files.
+
+ifneq ($(wildcard asn1/),)
+ASN1_FILES = $(sort $(call core_find,asn1/,*.asn1))
+ERL_FILES += $(addprefix src/,$(patsubst %.asn1,%.erl,$(notdir $(ASN1_FILES))))
+
+define compile_asn1
+	$(verbose) mkdir -p include/
+	$(asn1_verbose) erlc -v -I include/ -o asn1/ +noobj $(1)
+	$(verbose) mv asn1/*.erl src/
+	$(verbose) mv asn1/*.hrl include/
+	$(verbose) mv asn1/*.asn1db include/
+endef
+
+$(PROJECT).d:: $(ASN1_FILES)
+	$(if $(strip $?),$(call compile_asn1,$?))
+endif
+
+# SNMP MIB files.
+
+ifneq ($(wildcard mibs/),)
+MIB_FILES = $(sort $(call core_find,mibs/,*.mib))
+
+$(PROJECT).d:: $(COMPILE_MIB_FIRST_PATHS) $(MIB_FILES)
+	$(verbose) mkdir -p include/ priv/mibs/
+	$(mib_verbose) erlc -v $(ERLC_MIB_OPTS) -o priv/mibs/ -I priv/mibs/ $?
+	$(mib_verbose) erlc -o include/ -- $(addprefix priv/mibs/,$(patsubst %.mib,%.bin,$(notdir $?)))
+endif
+
+# Leex and Yecc files.
+
+XRL_FILES = $(sort $(call core_find,src/,*.xrl))
+XRL_ERL_FILES = $(addprefix src/,$(patsubst %.xrl,%.erl,$(notdir $(XRL_FILES))))
+ERL_FILES += $(XRL_ERL_FILES)
+
+YRL_FILES = $(sort $(call core_find,src/,*.yrl))
+YRL_ERL_FILES = $(addprefix src/,$(patsubst %.yrl,%.erl,$(notdir $(YRL_FILES))))
+ERL_FILES += $(YRL_ERL_FILES)
+
+$(PROJECT).d:: $(XRL_FILES) $(YRL_FILES)
+	$(if $(strip $?),$(xyrl_verbose) erlc -v -o src/ $?)
+
+# Erlang and Core Erlang files.
+
+define makedep.erl
+	ErlFiles = lists:usort(string:tokens("$(ERL_FILES)", " ")),
+	Modules = [{filename:basename(F, ".erl"), F} || F <- ErlFiles],
+	Add = fun (Dep, Acc) ->
+		case lists:keyfind(atom_to_list(Dep), 1, Modules) of
+			{_, DepFile} -> [DepFile|Acc];
+			false -> Acc
+		end
+	end,
+	AddHd = fun (Dep, Acc) ->
+		case {Dep, lists:keymember(Dep, 2, Modules)} of
+			{"src/" ++ _, false} -> [Dep|Acc];
+			{"include/" ++ _, false} -> [Dep|Acc];
+			_ -> Acc
+		end
+	end,
+	CompileFirst = fun (Deps) ->
+		First0 = [case filename:extension(D) of
+			".erl" -> filename:basename(D, ".erl");
+			_ -> []
+		end || D <- Deps],
+		case lists:usort(First0) of
+			[] -> [];
+			[[]] -> [];
+			First -> ["COMPILE_FIRST +=", [[" ", F] || F <- First], "\n"]
+		end
+	end,
+	Depend = [begin
+		case epp:parse_file(F, ["include/"], []) of
+			{ok, Forms} ->
+				Deps = lists:usort(lists:foldl(fun
+					({attribute, _, behavior, Dep}, Acc) -> Add(Dep, Acc);
+					({attribute, _, behaviour, Dep}, Acc) -> Add(Dep, Acc);
+					({attribute, _, compile, {parse_transform, Dep}}, Acc) -> Add(Dep, Acc);
+					({attribute, _, file, {Dep, _}}, Acc) -> AddHd(Dep, Acc);
+					(_, Acc) -> Acc
+				end, [], Forms)),
+				case Deps of
+					[] -> "";
+					_ -> [F, "::", [[" ", D] || D <- Deps], "; @touch \$$@\n", CompileFirst(Deps)]
+				end;
+			{error, enoent} ->
+				[]
+		end
+	end || F <- ErlFiles],
+	ok = file:write_file("$(1)", Depend),
+	halt()
+endef
+
+ifeq ($(if $(NO_MAKEDEP),$(wildcard $(PROJECT).d),),)
+$(PROJECT).d:: $(ERL_FILES) $(call core_find,include/,*.hrl)
+	$(makedep_verbose) $(call erlang,$(call makedep.erl,$@))
+endif
+
+-include $(PROJECT).d
+
+ebin/$(PROJECT).app:: ebin/
+
+ebin/:
+	$(verbose) mkdir -p ebin/
+
+define compile_erl
+	$(erlc_verbose) erlc -v $(if $(IS_DEP),$(filter-out -Werror,$(ERLC_OPTS)),$(ERLC_OPTS)) -o ebin/ \
+		-pa ebin/ -I include/ $(filter-out $(ERLC_EXCLUDE_PATHS),$(COMPILE_FIRST_PATHS) $(1))
+endef
+
+ebin/$(PROJECT).app:: $(ERL_FILES) $(CORE_FILES)
+	$(if $(strip $?),$(call compile_erl,$?))
 	$(eval GITDESCRIBE := $(shell git describe --dirty --abbrev=7 --tags --always --first-parent 2>/dev/null || true))
-	$(eval MODULES := $(patsubst %,'%',$(sort $(notdir $(basename $(shell find ebin -type f -name *.beam))))))
+	$(eval MODULES := $(patsubst %,'%',$(sort $(notdir $(basename \
+		$(filter-out $(ERLC_EXCLUDE_PATHS),$(ERL_FILES) $(CORE_FILES)))))))
 ifeq ($(wildcard src/$(PROJECT).app.src),)
 	$(app_verbose) echo $(subst $(newline),,$(subst ",\",$(call app_file,$(GITDESCRIBE),$(MODULES)))) \
 		> ebin/$(PROJECT).app
@@ -4663,64 +4824,16 @@ else
 		> ebin/$(PROJECT).app
 endif
 
-erlc-include:
-	- $(verbose) if [ -d ebin/ ]; then \
-		find include/ src/ -type f -name \*.hrl -newer ebin -exec touch $(shell find src/ -type f -name "*.erl") \; 2>/dev/null || printf ''; \
-	fi
-
-define compile_erl
-	$(erlc_verbose) erlc -v $(if $(IS_DEP),$(filter-out -Werror,$(ERLC_OPTS)),$(ERLC_OPTS)) -o ebin/ \
-		-pa ebin/ -I include/ $(filter-out $(ERLC_EXCLUDE_PATHS),\
-		$(COMPILE_FIRST_PATHS) $(1))
-endef
-
-define compile_xyrl
-	$(xyrl_verbose) erlc -v -o ebin/ $(1)
-	$(xyrl_verbose) erlc $(ERLC_OPTS) -o ebin/ ebin/*.erl
-	$(verbose) rm ebin/*.erl
-endef
-
-define compile_asn1
-	$(asn1_verbose) erlc -v -I include/ -o ebin/ $(1)
-	$(verbose) mv ebin/*.hrl include/
-	$(verbose) mv ebin/*.asn1db include/
-	$(verbose) rm ebin/*.erl
-endef
-
-define compile_mib
-	$(mib_verbose) erlc -v $(ERLC_MIB_OPTS) -o priv/mibs/ \
-		-I priv/mibs/ $(COMPILE_MIB_FIRST_PATHS) $(1)
-	$(mib_verbose) erlc -o include/ -- priv/mibs/*.bin
-endef
-
-ifneq ($(wildcard src/),)
-ebin/$(PROJECT).app::
-	$(verbose) mkdir -p ebin/
-
-ifneq ($(wildcard asn1/),)
-ebin/$(PROJECT).app:: $(sort $(call core_find,asn1/,*.asn1))
-	$(verbose) mkdir -p include
-	$(if $(strip $?),$(call compile_asn1,$?))
-endif
-
-ifneq ($(wildcard mibs/),)
-ebin/$(PROJECT).app:: $(sort $(call core_find,mibs/,*.mib))
-	$(verbose) mkdir -p priv/mibs/ include
-	$(if $(strip $?),$(call compile_mib,$?))
-endif
-
-ebin/$(PROJECT).app:: $(sort $(call core_find,src/,*.erl *.core))
-	$(if $(strip $?),$(call compile_erl,$?))
-
-ebin/$(PROJECT).app:: $(sort $(call core_find,src/,*.xrl *.yrl))
-	$(if $(strip $?),$(call compile_xyrl,$?))
-endif
-
 clean:: clean-app
 
 clean-app:
-	$(gen_verbose) rm -rf ebin/ priv/mibs/ \
-		$(addprefix include/,$(addsuffix .hrl,$(notdir $(basename $(call core_find,mibs/,*.mib)))))
+	$(gen_verbose) rm -rf $(PROJECT).d ebin/ priv/mibs/ $(XRL_ERL_FILES) $(YRL_ERL_FILES) \
+		$(addprefix include/,$(patsubst %.mib,%.hrl,$(notdir $(MIB_FILES)))) \
+		$(addprefix include/,$(patsubst %.asn1,%.hrl,$(notdir $(ASN1_FILES)))) \
+		$(addprefix include/,$(patsubst %.asn1,%.asn1db,$(notdir $(ASN1_FILES)))) \
+		$(addprefix src/,$(patsubst %.asn1,%.erl,$(notdir $(ASN1_FILES))))
+
+endif
 
 # Copyright (c) 2015, Viktor Söderqvist <viktor@zuiderkwast.se>
 # This file is part of erlang.mk and subject to the terms of the ISC License.
@@ -4775,12 +4888,12 @@ endif
 
 ifeq ($(wildcard ebin/test),)
 test-build:: ERLC_OPTS=$(TEST_ERLC_OPTS)
-test-build:: clean deps test-deps
+test-build:: clean deps test-deps $(PROJECT).d
 	$(verbose) $(MAKE) --no-print-directory app-build test-dir ERLC_OPTS="$(TEST_ERLC_OPTS)"
 	$(gen_verbose) touch ebin/test
 else
 test-build:: ERLC_OPTS=$(TEST_ERLC_OPTS)
-test-build:: deps test-deps
+test-build:: deps test-deps $(PROJECT).d
 	$(verbose) $(MAKE) --no-print-directory app-build test-dir ERLC_OPTS="$(TEST_ERLC_OPTS)"
 endif
 
@@ -4790,6 +4903,32 @@ clean-test-dir:
 ifneq ($(wildcard $(TEST_DIR)/*.beam),)
 	$(gen_verbose) rm -f $(TEST_DIR)/*.beam
 endif
+
+# Copyright (c) 2015, Loïc Hoguin <essen@ninenines.eu>
+# This file is part of erlang.mk and subject to the terms of the ISC License.
+
+.PHONY: rebar.config
+
+# We strip out -Werror because we don't want to fail due to
+# warnings when used as a dependency.
+
+define compat_convert_erlc_opt
+$(if $(filter-out -Werror,$1),\
+	$(if $(findstring +,$1),\
+		$(shell echo $1 | cut -b 2-)))
+endef
+
+define compat_rebar_config
+{deps, [$(call comma_list,$(foreach d,$(DEPS),\
+	{$(call dep_name,$d),".*",{git,"$(call dep_repo,$d)","$(call dep_commit,$d)"}}))]}.
+{erl_opts, [$(call comma_list,$(foreach o,$(ERLC_OPTS),$(call compat_convert_erlc_opt,$o)))]}.
+endef
+
+$(eval _compat_rebar_config = $$(compat_rebar_config))
+$(eval export _compat_rebar_config)
+
+rebar.config:
+	$(gen_verbose) echo "$${_compat_rebar_config}" > rebar.config
 
 # Copyright (c) 2015, Loïc Hoguin <essen@ninenines.eu>
 # This file is part of erlang.mk and subject to the terms of the ISC License.
@@ -5559,8 +5698,8 @@ ELVIS_CONFIG ?= $(CURDIR)/elvis.config
 ELVIS ?= $(CURDIR)/elvis
 export ELVIS
 
-ELVIS_URL ?= https://github.com/inaka/elvis/releases/download/0.2.5-beta2/elvis
-ELVIS_CONFIG_URL ?= https://github.com/inaka/elvis/releases/download/0.2.5-beta2/elvis.config
+ELVIS_URL ?= https://github.com/inaka/elvis/releases/download/0.2.5/elvis
+ELVIS_CONFIG_URL ?= https://github.com/inaka/elvis/releases/download/0.2.5/elvis.config
 ELVIS_OPTS ?=
 
 # Core targets.
@@ -5593,6 +5732,8 @@ distclean-elvis:
 # Configuration.
 
 DTL_FULL_PATH ?= 0
+DTL_PATH ?= templates/
+DTL_SUFFIX ?= _dtl
 
 # Verbosity.
 
@@ -5601,22 +5742,28 @@ dtl_verbose = $(dtl_verbose_$(V))
 
 # Core targets.
 
-define compile_erlydtl
-	$(dtl_verbose) $(ERL) -pa ebin/ $(DEPS_DIR)/erlydtl/ebin/ -eval ' \
-		Compile = fun(F) -> \
-			S = fun (1) -> re:replace(filename:rootname(string:sub_string(F, 11), ".dtl"), "/",  "_",  [{return, list}, global]); \
-				(0) -> filename:basename(F, ".dtl") \
-			end, \
-			Module = list_to_atom(string:to_lower(S($(DTL_FULL_PATH))) ++ "_dtl"), \
-			{ok, _} = erlydtl:compile(F, Module, [{out_dir, "ebin/"}, return_errors, {doc_root, "templates"}]) \
-		end, \
-		_ = [Compile(F) || F <- string:tokens("$(1)", " ")], \
-		halt().'
+define erlydtl_compile.erl
+	[begin
+		Module0 = case $(DTL_FULL_PATH) of
+			0 ->
+				filename:basename(F, ".dtl");
+			1 ->
+				"$(DTL_PATH)" ++ F2 = filename:rootname(F, ".dtl"),
+				re:replace(F2, "/",  "_",  [{return, list}, global])
+		end,
+		Module = list_to_atom(string:to_lower(Module0) ++ "$(DTL_SUFFIX)"),
+		case erlydtl:compile(F, Module, [{out_dir, "ebin/"}, return_errors, {doc_root, "templates"}]) of
+			ok -> ok;
+			{ok, _} -> ok
+		end
+	end || F <- string:tokens("$(1)", " ")],
+	halt().
 endef
 
 ifneq ($(wildcard src/),)
-ebin/$(PROJECT).app:: $(sort $(call core_find,templates/,*.dtl))
-	$(if $(strip $?),$(call compile_erlydtl,$?))
+ebin/$(PROJECT).app:: $(sort $(call core_find,$(DTL_PATH),*.dtl))
+	$(if $(strip $?),\
+		$(dtl_verbose) $(call erlang,$(call erlydtl_compile.erl,$?,-pa ebin/ $(DEPS_DIR)/erlydtl/ebin/)))
 endif
 
 # Copyright (c) 2014 Dave Cottlehuber <dch@skunkwerks.at>
@@ -5742,12 +5889,10 @@ eunit: test-build
 
 # Configuration.
 
+RELX ?= $(CURDIR)/relx
 RELX_CONFIG ?= $(CURDIR)/relx.config
 
-RELX ?= $(CURDIR)/relx
-export RELX
-
-RELX_URL ?= https://github.com/erlware/relx/releases/download/v2.0.0/relx
+RELX_URL ?= https://github.com/erlware/relx/releases/download/v3.5.0/relx
 RELX_OPTS ?=
 RELX_OUTPUT_DIR ?= _rel
 
@@ -5839,7 +5984,7 @@ shell: build-shell-deps
 # Copyright (c) 2015, Loïc Hoguin <essen@ninenines.eu>
 # This file is part of erlang.mk and subject to the terms of the ISC License.
 
-ifneq ($(wildcard $(DEPS_DIR)/triq),)
+ifeq ($(filter triq,$(DEPS) $(TEST_DEPS)),triq)
 .PHONY: triq
 
 # Targets.

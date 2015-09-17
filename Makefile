@@ -1,6 +1,6 @@
 PROJECT = riak_core
 
-COMPILE_FIRST = riak_core_broadcast_handler.erl riak_core_gen_server.erl
+COMPILE_FIRST = riak_core_broadcast_handler riak_core_gen_server
 
 DEPS = lager poolboy basho_stats riak_sysmon riak_ensemble pbkdf2 eleveldb exometer_core clique folsom
 
