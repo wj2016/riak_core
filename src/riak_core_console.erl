@@ -31,7 +31,8 @@
          print_users/1, print_user/1, print_sources/1,
          print_groups/1, print_group/1, print_grants/1,
          security_enable/1, security_disable/1, security_status/1, ciphers/1,
-	 stat_show/1, stat_info/1, stat_enable/1, stat_disable/1, stat_reset/1]).
+	 stat_show/1, stat_info/1, stat_enable/1, stat_disable/1, stat_reset/1,
+     log_security_event/4, log_operations_command/3, log_operations_command/4]).
 
 %% New CLI API
 -export([command/1]).
@@ -1356,6 +1357,19 @@ stat_reset(Arg) ->
 		[io:fwrite("~p: ~p~n", [N, exometer:reset(N)])
 		 || {N, _, _} <- Entries]
 	end, find_entries(Arg, enabled)).
+
+log_security_event(success, User, Command, Args) ->
+    security:info("Succesful security command issued by user ~p with command: riak-admin security ~p ~p.",
+        [User, Command, Args]);
+log_security_event(failed, User, Command, Args) ->
+    security:error("Failed security command issued by user ~p with command: riak-admin security ~p ~p.",
+        [User, Command, Args]).
+log_operations_command(User, Script, Command) ->
+    operations:info("User ~p issued command: ~p ~p ~p.",
+        [User, Script, Command]).
+log_operations_command(User, Script, Command, Args) ->
+    operations:info("User ~p issued command: ~p ~p ~p.",
+        [User, Script, Command, Args]).
 
 change_status(N, St) ->
     case exometer:setopts(N, [{status, St}]) of

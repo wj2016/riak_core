@@ -394,6 +394,9 @@ check_permissions([Permission|Rest], Ctx) ->
             Other
     end.
 
+
+get_username(undefined) ->
+    undefined;
 get_username(#context{username=Username}) ->
     Username.
 
