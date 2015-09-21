@@ -1368,7 +1368,7 @@ log_operations_command([User, Script, Command]) ->
     operations:info("User ~s issued command: ~s ~s.",
         [User, Script, Command]);
 log_operations_command([User, Script, Command, Args]) ->
-    operations:info("User ~s issued command: ~s ~s with args: ~s.",
+    operations:info("User ~s issued command: ~s ~s ~s.",
         [User, Script, Command, Args]).
 
 change_status(N, St) ->
