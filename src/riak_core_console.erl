@@ -1358,6 +1358,9 @@ stat_reset(Arg) ->
 		 || {N, _, _} <- Entries]
 	end, find_entries(Arg, enabled)).
 
+log_security_event(["success", User, Command]) ->
+    security:info("Succesful security command issued by user ~s with command: riak-admin security ~s",
+        [User, Command]);
 log_security_event(["success", User, Command, Args]) ->
     security:info("Succesful security command issued by user ~s with command: riak-admin security ~s ~s",
         [User, Command, Args]);
