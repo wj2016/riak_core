@@ -32,7 +32,7 @@
          print_groups/1, print_group/1, print_grants/1,
          security_enable/1, security_disable/1, security_status/1, ciphers/1,
 	 stat_show/1, stat_info/1, stat_enable/1, stat_disable/1, stat_reset/1,
-     log_security_event/4, log_operations_command/3, log_operations_command/4]).
+     log_security_event/1, log_operations_command/1]).
 
 %% New CLI API
 -export([command/1]).
@@ -1366,7 +1366,7 @@ log_security_event([failed, User, Command, Args]) ->
         [User, Command, Args]).
 log_operations_command([User, Script, Command]) ->
     operations:info("User ~p issued command: ~p ~p ~p.",
-        [User, Script, Command]).
+        [User, Script, Command]);
 log_operations_command([User, Script, Command, Args]) ->
     operations:info("User ~p issued command: ~p ~p ~p.",
         [User, Script, Command, Args]).
