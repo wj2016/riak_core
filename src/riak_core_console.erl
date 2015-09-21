@@ -1358,10 +1358,10 @@ stat_reset(Arg) ->
 		 || {N, _, _} <- Entries]
 	end, find_entries(Arg, enabled)).
 
-log_security_event([success, User, Command, Args]) ->
+log_security_event(["success", User, Command, Args]) ->
     security:info("Succesful security command issued by user ~s with command: riak-admin security ~s ~s",
         [User, Command, Args]);
-log_security_event([failed, User, Command, Args]) ->
+log_security_event(["failed", User, Command, Args]) ->
     security:error("Failed security command issued by user ~s with command: riak-admin security ~s ~s",
         [User, Command, Args]).
 log_operations_command([User, Script, Command]) ->
