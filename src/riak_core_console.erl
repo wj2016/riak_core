@@ -1366,7 +1366,10 @@ log_security_event(["success", User, Command, Args]) ->
         [User, Command, Args]);
 log_security_event(["failed", User, Command, Args]) ->
     security:error("Failed security command issued by user ~s with command: riak-admin security ~s ~s",
-        [User, Command, Args]).
+        [User, Command, Args]);
+log_security_event(["failed", User, Command]) ->
+    security:error("Failed security command issued by user ~s with command: riak-admin security ~s",
+        [User, Command]).
 log_operations_command([User, Script, Command]) ->
     operations:info("User ~s issued command: ~s ~s",
         [User, Script, Command]);
