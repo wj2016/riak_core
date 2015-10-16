@@ -124,8 +124,11 @@
          levels/1,
          segments/1,
          width/1,
-         mem_levels/1]).
+         mem_levels/1,
+         path/1]).
 -export([compare2/4]).
+
+-export([multi_select_segment/3, safe_decode/1]).
 
 -ifdef(namespaced_types).
 -type hashtree_dict() :: dict:dict().
@@ -136,6 +139,7 @@
 -endif.
 
 -ifdef(TEST).
+-compile([export_all]).
 -export([local_compare/2]).
 -export([run_local/0,
          run_local/1,
@@ -420,6 +424,10 @@ width(#state{width=W}) ->
 -spec mem_levels(hashtree()) -> integer().
 mem_levels(#state{mem_levels=M}) ->
     M.
+
+-spec path(hashtree()) -> string().
+path(#state{path=P}) ->
+    P.
 
 %% Note: meta is currently a one per file thing, even if there are multiple
 %%       trees per file. This is intentional. If we want per tree metadata
