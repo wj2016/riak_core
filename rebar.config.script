@@ -1,0 +1,5 @@
+case os:getenv("REBAR_USE_DEV") of
+    false -> CONFIG;
+    [] -> CONFIG;
+    _ -> {ok, DevConfig} = file:consult("rebar.config.dev"), DevConfig
+end.
