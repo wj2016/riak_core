@@ -105,6 +105,17 @@ behaviour_info(_) ->
 -type from() :: {atom(), req_id(), pid()}.
 -type index() :: chash:index_as_int().
 
+%-define(PROF_QUERY, 1).
+
+-ifdef(PROF_QUERY).
+-compile(export_all).
+-endif.
+
+-ifdef(PROF_QUERY).
+fakeResp() ->
+    [{<<16,0,0,0,3,12,183,128,8,16,0,0,0,2,18,163,217,109,244,59,69,150,199,107,180,219,128,8,18,163,217,109,244,59,69,150,199,107,180,219,128,8,16,0,0,0,3,18,179,88,109,182,155,101,230,98,8,18,185,217,110,86,155,45,206,176,8,10,0,0,0,200>>,<<53,1,0,0,0,27,131,108,0,0,0,1,104,2,109,0,0,0,1,0,104,2,97,1,110,5,0,74,27,77,208,14,106,0,0,0,1,0,0,0,86,2,135,168,109,121,102,97,109,105,108,121,167,102,97,109,105,108,121,49,168,109,121,115,101,114,105,101,115,167,115,101,114,105,101,115,88,164,116,105,109,101,100,165,109,121,105,110,116,1,165,109,121,98,105,110,165,116,101,115,116,49,167,109,121,102,108,111,97,116,203,63,240,0,0,0,0,0,0,166,109,121,98,111,111,108,195,0,0,0,52,0,0,5,177,0,0,145,10,0,3,147,80,22,49,115,55,78,74,98,86,109,89,88,105,69,55,65,86,107,65,111,100,54,52,68,0,0,0,0,4,1,100,100,108,0,0,0,4,0,131,97,1>>}].
+-endif.
+
 -record(state, {coverage_vnodes :: [{non_neg_integer(), node()}],
                 mod :: atom(),
                 mod_state :: tuple(),
@@ -123,7 +134,8 @@ behaviour_info(_) ->
                 vnode_master :: atom(),
                 plan_fun :: function(),
                 process_fun :: function(),
-                coverage_plan_mod :: module()
+                coverage_plan_mod :: module(),
+		from :: tuple()
                }).
 
 %% ===================================================================
@@ -183,7 +195,8 @@ init([Mod,
                        vnode_master=VNodeMaster,
                        plan_fun = PlanFun,
                        process_fun = ProcessFun,
-                       coverage_plan_mod = PlannerMod},
+                       coverage_plan_mod = PlannerMod,
+		       from = From},
     {ok, initialize, StateData, 0};
 init({test, Args, StateProps}) ->
     %% Call normal init
@@ -235,6 +248,21 @@ interpret_plan(#vnode_coverage{vnode_identifier = TargetHash,
                                subpartition     = {Mask, BSL}}) ->
     {[{TargetHash, node()}], [{TargetHash, {Mask, BSL}}]}.
 
+-ifdef(PROF_QUERY).
+coverageProf(_Request, _CoverageVNodes, _FilterVNodes, _Sender, _VNodeMaster, _StateData, _Timeout, {_,_,ClientPid}, ReqId, ModState) ->
+    lager:info("~p Sending fake response~n", [self()]),
+    ClientPid ! {ReqId, {results, fakeResp()}},
+    ClientPid ! {ReqId, done},
+    {stop, normal, ModState}.
+-else.
+coverageProf(Request, CoverageVNodes, FilterVNodes, Sender, VNodeMaster, StateData, Timeout, _From, _ReqId, _ModState) ->
+    riak_core_vnode_master:coverage(Request,
+				    CoverageVNodes,
+				    FilterVNodes,
+				    Sender,
+				    VNodeMaster),
+    {next_state, waiting_results, StateData, Timeout}.
+-endif.
 
 %% @private
 initialize(timeout, StateData0=#state{mod=Mod,
@@ -248,7 +276,8 @@ initialize(timeout, StateData0=#state{mod=Mod,
                                       timeout=Timeout,
                                       vnode_master=VNodeMaster,
                                       plan_fun = PlanFun,
-                                      coverage_plan_mod = PlanMod}) ->
+                                      coverage_plan_mod = PlanMod},
+				      from = From}) ->
     CoveragePlan = find_plan(PlanMod,
                              VNodeSelector,
                              NVal,
@@ -268,7 +297,7 @@ initialize(timeout, StateData0=#state{mod=Mod,
                                             Sender,
                                             VNodeMaster),
             StateData = StateData0#state{coverage_vnodes=CoverageVNodes, mod_state=UpModState},
-            {next_state, waiting_results, StateData, Timeout}
+	    coverageProf(Request, CoverageVNodes, FilterVNodes, Sender, VNodeMaster, StateData, Timeout, From, ReqId, ModState)
     end.
 
 %% @private
