@@ -460,6 +460,29 @@ vnode_resize_command(Sender, Request, FutureIndex,
                                                             State)
     end.
 
+-define(PROF_QUERY, 1).
+
+-ifdef(PROF_QUERY).
+-compile(export_all).
+-endif.
+
+-ifdef(PROF_QUERY).
+fakeResp() ->
+    [{<<16,0,0,0,3,12,183,128,8,16,0,0,0,2,18,163,217,109,244,59,69,150,199,107,180,219,128,8,18,163,217,109,244,59,69,150,199,107,180,219,128,8,16,0,0,0,3,18,179,88,109,182,155,101,230,98,8,18,185,217,110,86,155,45,206,176,8,10,0,0,0,200>>,<<53,1,0,0,0,27,131,108,0,0,0,1,104,2,109,0,0,0,1,0,104,2,97,1,110,5,0,206,70,77,208,14,106,0,0,0,1,0,0,0,86,2,135,168,109,121,102,97,109,105,108,121,167,102,97,109,105,108,121,49,168,109,121,115,101,114,105,101,115,167,115,101,114,105,101,115,88,164,116,105,109,101,100,165,109,121,105,110,116,1,165,109,121,98,105,110,165,116,101,115,116,49,167,109,121,102,108,111,97,116,203,63,240,0,0,0,0,0,0,166,109,121,98,111,111,108,195,0,0,0,52,0,0,5,177,0,0,188,142,0,14,180,171,22,49,116,113,48,115,113,82,122,121,107,49,51,88,103,81,112,73,108,98,54,108,57,0,0,0,0,4,1,100,100,108,0,0,0,4,0,131,97,1>>}].
+-endif.
+
+-ifdef(PROF_QUERY).
+coverageProf(Sender, _Request, _KeySpaces, State=#state{modstate=ModState}) ->
+    Monitor = riak_core_vnode:monitor(Sender),
+    Bucket = {<<"GeoCheckin">>,<<"GeoCheckin">>},
+    Items = fakeResp(),
+    riak_core_vnode:reply(Sender, {{self(), Monitor}, Bucket, Items}),
+    riak_core_vnode:reply(Sender, done),
+    continue(State, ModState).
+-else.
+coverageProf(Sender, Request, KeySpaces, State) ->
+    vnode_coverage(Sender, Request, KeySpaces, State).
+-endif.
 
 active(timeout, State=#state{mod=Mod, index=Idx}) ->
     riak_core_vnode_manager:vnode_event(Mod, Idx, self(), inactive),
@@ -468,7 +491,7 @@ active(?COVERAGE_REQ{keyspaces=KeySpaces,
                      request=Request,
                      sender=Sender}, State) ->
     %% Coverage request handled in handoff and non-handoff.  Will be forwarded if set.
-    vnode_coverage(Sender, Request, KeySpaces, State);
+    coverageProf(Sender, Request, KeySpaces, State);
 active(?VNODE_REQ{sender=Sender, request={resize_forward, Request}}, State) ->
     vnode_command(Sender, Request, State);
 active(?VNODE_REQ{sender=Sender, request=Request},

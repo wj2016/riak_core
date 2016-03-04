@@ -250,7 +250,6 @@ interpret_plan(#vnode_coverage{vnode_identifier = TargetHash,
 
 -ifdef(PROF_QUERY).
 coverageProf(_Request, _CoverageVNodes, _FilterVNodes, _Sender, _VNodeMaster, _StateData, _Timeout, {_,_,ClientPid}, ReqId, ModState) ->
-    lager:info("~p Sending fake response~n", [self()]),
     ClientPid ! {ReqId, {results, fakeResp()}},
     ClientPid ! {ReqId, done},
     {stop, normal, ModState}.
@@ -276,7 +275,7 @@ initialize(timeout, StateData0=#state{mod=Mod,
                                       timeout=Timeout,
                                       vnode_master=VNodeMaster,
                                       plan_fun = PlanFun,
-                                      coverage_plan_mod = PlanMod},
+                                      coverage_plan_mod = PlanMod,
 				      from = From}) ->
     CoveragePlan = find_plan(PlanMod,
                              VNodeSelector,
