@@ -460,7 +460,7 @@ vnode_resize_command(Sender, Request, FutureIndex,
                                                             State)
     end.
 
--define(PROF_QUERY, 1).
+%-define(PROF_QUERY, 1).
 
 -ifdef(PROF_QUERY).
 -compile(export_all).
