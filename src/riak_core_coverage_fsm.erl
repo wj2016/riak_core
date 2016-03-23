@@ -89,6 +89,8 @@
          terminate/3,
          code_change/4]).
 
+-include_lib("profiler/include/profiler.hrl").
+
 -spec behaviour_info(atom()) -> 'undefined' | [{atom(), arity()}].
 behaviour_info(callbacks) ->
     [
@@ -176,11 +178,22 @@ test_link(Mod, From, RequestArgs, _Options, StateProps) ->
 init([Mod,
       From={_, ReqId, _},
       RequestArgs]) ->
+
+    profiler:perf_profile({stop, 24}),
+    profiler:perf_profile({start, 22, ?FNNAME()}),
+
+    profiler:perf_profile({start, 25, "riak_kv_index_fsm:module_info"}),
     Exports = Mod:module_info(exports),
+    profiler:perf_profile({stop, 25}),
+
     {Request, VNodeSelector, NVal, PrimaryVNodeCoverage,
      NodeCheckService, VNodeMaster, Timeout, PlannerMod, ModState} =
         Mod:init(From, RequestArgs),
+
+    profiler:perf_profile({start, 28, "riak_core_coverage_fsm:maybe_start_timeout_timer"}),
     maybe_start_timeout_timer(Timeout),
+    profiler:perf_profile({stop, 28}),
+
     PlanFun = plan_callback(Mod, Exports),
     ProcessFun = process_results_callback(Mod, Exports),
     StateData = #state{mod=Mod,
@@ -197,8 +210,10 @@ init([Mod,
                        process_fun = ProcessFun,
                        coverage_plan_mod = PlannerMod,
 		       from = From},
+    profiler:perf_profile({stop, 22}),
     {ok, initialize, StateData, 0};
 init({test, Args, StateProps}) ->
+    profiler:perf_profile({start, 23, ?FNNAME()}),
     %% Call normal init
     {ok, initialize, StateData, 0} = init(Args),
 
@@ -213,6 +228,7 @@ init({test, Args, StateProps}) ->
 
     %% Enter into the execute state, skipping any code that relies on the
     %% state of the rest of the system
+    profiler:perf_profile({stop, 23}),
     {ok, waiting_results, TestStateData, 0}.
 
 %% @private
@@ -277,6 +293,7 @@ initialize(timeout, StateData0=#state{mod=Mod,
                                       plan_fun = PlanFun,
                                       coverage_plan_mod = PlanMod,
 				      from = From}) ->
+    profiler:perf_profile({start, 10, ?FNNAME()}),
     CoveragePlan = find_plan(PlanMod,
                              VNodeSelector,
                              NVal,
@@ -284,6 +301,7 @@ initialize(timeout, StateData0=#state{mod=Mod,
                              ReqId,
                              NodeCheckService,
                              Request),
+    Ret =
     case CoveragePlan of
         {error, Reason} ->
             Mod:finish({error, Reason}, ModState);
@@ -297,7 +315,9 @@ initialize(timeout, StateData0=#state{mod=Mod,
                                             VNodeMaster),
             StateData = StateData0#state{coverage_vnodes=CoverageVNodes, mod_state=UpModState},
 	    coverageProf(Request, CoverageVNodes, FilterVNodes, Sender, VNodeMaster, StateData, Timeout, From, ReqId, ModState)
-    end.
+    end,
+    profiler:perf_profile({stop, 10}),
+    Ret.
 
 %% @private
 waiting_results({{ReqId, VNode}, Results},
@@ -361,15 +381,21 @@ code_change(_OldVsn, StateName, State, _Extra) ->
     {ok, StateName, State}.
 
 plan_callback(Mod, Exports) ->
+    profiler:perf_profile({start, 26, ?FNNAME()}),
+    Ret =
     case exports(plan, Exports) of
         true ->
             fun(CoverageVNodes, ModState) ->
                     Mod:plan(CoverageVNodes, ModState) end;
         _ -> fun(_, ModState) ->
                      {ok, ModState} end
-    end.
+    end,
+    profiler:perf_profile({stop, 26}),
+    Ret.
 
 process_results_callback(Mod, Exports) ->
+    profiler:perf_profile({start, 27, ?FNNAME()}),
+    Ret = 
     case exports_arity(process_results, 3, Exports) of
         true ->
             fun(VNode, Results, ModState) ->
@@ -377,7 +403,9 @@ process_results_callback(Mod, Exports) ->
         false ->
             fun(_VNode, Results, ModState) ->
                     Mod:process_results(Results, ModState) end
-    end.
+    end,
+    profiler:perf_profile({stop, 27}),
+    Ret.
 
 exports(Function, Exports) ->
     proplists:is_defined(Function, Exports).

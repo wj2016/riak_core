@@ -32,6 +32,8 @@
                                  {gen_server, pulse_gen_server}]}).
 -endif.
 
+-include_lib("profiler/include/profiler.hrl").
+
 -record(state, {
         module :: atom(),
         modstate :: any()
@@ -67,6 +69,7 @@ handle_call(Event, _From, State) ->
 
 handle_cast({work, Work, WorkFrom, Caller},
             #state{module = Mod, modstate = ModState} = State) ->
+    profiler:perf_profile({start, 6, ?FNNAME()}),
     NewModState = case Mod:handle_work(Work, WorkFrom, ModState) of
         {reply, Reply, NS} ->
             riak_core_vnode:reply(WorkFrom, Reply),
@@ -76,6 +79,7 @@ handle_cast({work, Work, WorkFrom, Caller},
     end,
     %% check the worker back into the pool
     gen_fsm:send_all_state_event(Caller, {checkin, self()}),
+    profiler:perf_profile({stop, 6}),
     {noreply, State#state{modstate=NewModState}};
 handle_cast(_Event, State) ->
     {noreply, State}.

@@ -124,6 +124,8 @@
 
 -callback delete(ModState::term()) -> {ok, NewModState::term()}.
 
+-include_lib("profiler/include/profiler.hrl").
+
 %% handle_exit/3 is an optional behaviour callback that can be implemented.
 %% It will be called in the case that a process that is linked to the vnode
 %% process dies and allows the module using the behaviour to take appropriate
@@ -490,8 +492,11 @@ active(timeout, State=#state{mod=Mod, index=Idx}) ->
 active(?COVERAGE_REQ{keyspaces=KeySpaces,
                      request=Request,
                      sender=Sender}, State) ->
+    profiler:perf_profile({start, 13, ?FNNAME()}),
     %% Coverage request handled in handoff and non-handoff.  Will be forwarded if set.
-    coverageProf(Sender, Request, KeySpaces, State);
+    Ret = coverageProf(Sender, Request, KeySpaces, State),
+    profiler:perf_profile({stop, 13}),
+    Ret;
 active(?VNODE_REQ{sender=Sender, request={resize_forward, Request}}, State) ->
     vnode_command(Sender, Request, State);
 active(?VNODE_REQ{sender=Sender, request=Request},
