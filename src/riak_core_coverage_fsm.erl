@@ -308,6 +308,7 @@ initialize(timeout, StateData0=#state{mod=Mod,
         {CoverageVNodes, FilterVNodes} ->
             {ok, UpModState} = PlanFun(CoverageVNodes, ModState),
             Sender = {fsm, ReqId, self()},
+            StateData = StateData0#state{coverage_vnodes=CoverageVNodes, mod_state=UpModState},                     
 	    coverageProf(Request, CoverageVNodes, FilterVNodes, Sender, VNodeMaster, StateData, Timeout, From, ReqId, ModState)
     end,
     profiler:perf_profile({stop, 10}),
