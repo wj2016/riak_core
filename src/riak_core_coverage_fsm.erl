@@ -164,7 +164,7 @@ test_link(Mod, From, RequestArgs, _Options, StateProps) ->
 init([Mod,
       From={_, ReqId, _},
       RequestArgs]) ->
-    Exports = Mod:module_info(exports),
+    Exports = [{perf_fnstring,1},{use_ack_backpressure,0},{req,3},{init,2},{plan,2},{process_results,3},{process_results,2},{finish,2},{module_info,0},{module_info,1}],
     {Request, VNodeSelector, NVal, PrimaryVNodeCoverage,
      NodeCheckService, VNodeMaster, Timeout, PlannerMod, ModState} =
         Mod:init(From, RequestArgs),
