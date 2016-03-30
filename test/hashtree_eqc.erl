@@ -43,9 +43,9 @@ hashtree_test_() ->
 -record(state,
     {
       started = false,
-      params = undefined,
-      only1 = [],
-      only2 = []
+      params = undefined, % {Segments, Width, MemLevels}
+      snap1 = undefined,  % undefined, created, updated
+      snap2 = undefined   % undefined, created, updated
     }).
 
 integer_to_binary(Int) ->
@@ -71,27 +71,34 @@ objects() ->
 mark() ->
     frequency([{1, mark_empty}, {5, mark_open}]).
 
-command(_S = #state{started = Started}) ->
+command(_S = #state{started = false}) ->
+    {call, ?MODULE, start, [{oneof(?POWERS), oneof(?POWERS), choose(0, 4)}, mark(), mark()]};
+command(_S = #state{started = true, snap1 = Snap1, snap2 = Snap2}) ->
+    %% Increase snap frequency once update snapshot has begun
+    SS = Snap1 /= undefined orelse Snap2 /= undefined,
+    SF = case SS of true -> 100; _ -> 1 end,
     frequency(
-        [{1, {call, ?MODULE, start,
-              [{oneof(?POWERS), oneof(?POWERS), choose(0, 4)}, mark(), mark()]}} || not Started] ++
-        [{1, {call, ?MODULE, update_tree, [t1]}} || Started] ++
-        [{1, {call, ?MODULE, update_tree, [t2]}} || Started] ++
-        [{50, {call, ?MODULE, write, [t1, objects()]}} || Started] ++
-        [{50, {call, ?MODULE, write, [t2, objects()]}} || Started] ++
-        [{100,{call, ?MODULE, write_both, [objects()]}} || Started] ++
-        [{50, {call, ?MODULE, delete, [t1, key()]}} || Started] ++
-        [{50, {call, ?MODULE, delete, [t2, key()]}} || Started] ++
-        [{100,{call, ?MODULE, delete_both, [key()]}} || Started] ++
-        [{1, {call, ?MODULE, reopen_tree, [t1]}} || Started] ++
-        [{1, {call, ?MODULE, reopen_tree, [t2]}} || Started] ++
-        [{1, {call, ?MODULE, unsafe_close, [t1]}} || Started] ++
-        [{1, {call, ?MODULE, unsafe_close, [t2]}} || Started] ++
-        [{1, {call, ?MODULE, rehash_tree, [t1]}} || Started] ++
-        [{1, {call, ?MODULE, rehash_tree, [t2]}} || Started] ++
-        [{1, {call, ?MODULE, reconcile, []}} || Started] ++
-        []
+	[{ SF, {call, ?MODULE, update_snapshot,  [t1, s1]}} || Snap1 == undefined] ++
+	[{ SF, {call, ?MODULE, update_perform,   [t1]}} || Snap1 == created] ++
+	[{ SF, {call, ?MODULE, set_next_rebuild, [t1]}} || Snap1 == updated] ++
+	[{ SF, {call, ?MODULE, update_snapshot,  [t2, s2]}} || Snap2 == undefined] ++
+	[{ SF, {call, ?MODULE, update_perform,   [t2]}} || Snap2 == created] ++
+	[{ SF, {call, ?MODULE, set_next_rebuild, [t2]}} || Snap2 == updated] ++
+        [{10*SF, {call, ?MODULE, local_compare, []}} || Snap1 == updated, Snap2 == updated] ++
+        [{101-SF, {call, ?MODULE, write, [t1, objects()]}},
+	 {101-SF, {call, ?MODULE, write, [t2, objects()]}},
+         {101-SF, {call, ?MODULE, write_both, [objects()]}},
+         {101-SF, {call, ?MODULE, delete, [t1, key()]}},
+         {101-SF, {call, ?MODULE, delete, [t2, key()]}},
+         {101-SF, {call, ?MODULE, delete_both, [key()]}},
+         {  1, {call, ?MODULE, reopen_tree, [t1]}},
+         {  1, {call, ?MODULE, reopen_tree, [t2]}},
+         {  1, {call, ?MODULE, unsafe_close, [t1]}},
+         {  1, {call, ?MODULE, unsafe_close, [t2]}},
+         {  1, {call, ?MODULE, rehash_tree, [t1]}},
+	 {  1, {call, ?MODULE, rehash_tree, [t2]}}]
     ).
+
 
 start(Params, T1Mark, T2Mark) ->
     {Segments, Width, MemLevels} = Params,
@@ -118,9 +125,33 @@ start(Params, T1Mark, T2Mark) ->
 
     put(t2, T2),
 
-    ets:new(t1, [named_table, public, set]),
-    ets:new(t2, [named_table, public, set]),
+    %% Make sure ETS is pristine
+    catch ets:delete(t1),
+    catch ets:delete(t2),
+    catch ets:delete(s1),
+    catch ets:delete(s2),
+    ets_new(t1),
+    ets_new(t2),
     ok.
+
+update_snapshot(T, S) ->
+    %% Snapshot the hashtree and store both states
+    {SS, HT} = hashtree:update_snapshot(get(T)),
+    put(T, HT),
+    put({snap, T}, SS),
+    %% Copy the current ets table to the snapshot table.
+    catch ets:delete(S),
+    ets_new(S),
+    ets:insert(S, ets:tab2list(T)),
+    ok.
+
+update_perform(T) ->
+    _ = hashtree:update_perform(get({snap, T})),
+    erase({snap, T}),
+    ok.
+
+set_next_rebuild(T) ->
+    _ = hashtree:set_next_rebuild(get(T), incremental).
 
 write(T, Objects) ->
     lists:foreach(fun({Key, Hash}) ->
@@ -142,10 +173,6 @@ delete(T, Key) ->
 delete_both(Key) ->
     delete(t1, Key),
     delete(t2, Key),
-    ok.
-
-update_tree(T) ->
-    put(T, hashtree:update_tree(get(T))),
     ok.
 
 rehash_tree(T) ->
@@ -190,37 +217,28 @@ unsafe_close(T) ->
 
     ok.
 
-reconcile() ->
-    put(t1, hashtree:update_tree(get(t1))),
-    put(t2, hashtree:update_tree(get(t2))),
-    KeyDiff = hashtree:local_compare(get(t1), get(t2)),
-    Missing = [M || {missing, M} <- KeyDiff],
-    RemoteMissing = [M || {remote_missing, M} <- KeyDiff],
-    Different = [D || {different, D} <- KeyDiff],
+local_compare() ->
+    hashtree:local_compare(get(t1), get(t2)).
 
-    Insert = fun(T, Vals) ->
-                 write(T, Vals)
-             end,
+precondition(#state{started = false}, {call, _, F, _A}) ->
+    F == start;
+precondition(#state{snap1 = Snap1}, {call, _, update_snapshot, [t1, _]}) ->
+    Snap1 == undefined;
+precondition(#state{snap1 = Snap1}, {call, _, update_perform, [t1]}) ->
+    Snap1 == created;
+precondition(#state{snap1 = Snap1}, {call, _, set_next_rebuild, [t1]}) ->
+    Snap1 == updated;
+precondition(#state{snap2 = Snap2}, {call, _, update_snapshot, [t2, _]}) ->
+    Snap2 == undefined;
+precondition(#state{snap2 = Snap2}, {call, _, update_perform, [t2]}) ->
+    Snap2 == created;
+precondition(#state{snap2 = Snap2}, {call, _, set_next_rebuild, [t2]}) ->
+    Snap2 == updated;
+precondition(#state{snap1 = Snap1, snap2 = Snap2}, {call, _, local_compare, []}) ->
+    Snap1 == updated andalso Snap2 == updated;
+precondition(_S, _C) ->
+    true.
 
-    %% Lazy reuse of existing code - could be changed to check ETS directly
-    Only1 = ets:tab2list(t1),
-    Only2 = ets:tab2list(t2),
-
-    Insert(t1, [lists:keyfind(K, 1, Only2) ||  K <- Missing, lists:keyfind(K, 1,
-                Only2) /= false]),
-    Insert(t2, [lists:keyfind(K, 1, Only1) ||  K <- RemoteMissing, lists:keyfind(K, 1,
-                Only1) /= false]),
-    Insert(t2, [lists:keyfind(K, 1, Only1) ||  K <- Different, lists:keyfind(K, 1,
-                Only1) /= false]),
-    ok.
-
-precondition(#state{started = Started}, {call, _, F, _A}) ->
-    case F of
-        start ->
-            Started == false;
-        _ ->
-            Started == true
-    end.
 
 postcondition(_S,{call,_,start, [_, T1Mark, T2Mark]},_R) ->
     NextRebuildT1 = hashtree:next_rebuild(get(t1)),
@@ -233,36 +251,47 @@ postcondition(_S,{call,_,start, [_, T1Mark, T2Mark]},_R) ->
         mark_empty -> eq(NextRebuildT2, incremental);
         _ -> eq(NextRebuildT2, full)
     end;
+postcondition(_S,{call, _, local_compare, _},  Result) ->
+    Expect = expect_compare(),
+    eq(Expect, lists:sort(Result));	
 postcondition(_S,{call,_,_,_},_R) ->
     true.
 
 next_state(S,_R,{call, _, start, [Params,_,_]}) ->
     S#state{started = true, params = Params};
-next_state(S,_V,{call, _, write, [t1, Objects]}) ->
-    S#state{only1=keymerge(Objects, S#state.only1)};
-next_state(S,_V,{call, _, write, [t2, Objects]}) ->
-    S#state{only2=keymerge(Objects, S#state.only2)};
-next_state(S,_R,{call, _, write_both, [Objects]}) ->
-    S#state{only1=keymerge(Objects, S#state.only1),
-            only2=keymerge(Objects, S#state.only2)};
-next_state(S,_V,{call, _, delete, [t1, Key]}) ->
-    S#state{only1=lists:keydelete(Key, 1, S#state.only1)};
-next_state(S,_V,{call, _, delete, [t2, Key]}) ->
-    S#state{only2=lists:keydelete(Key, 1, S#state.only2)};
-next_state(S,_R,{call, _, delete_both, [Key]}) ->
-    S#state{only1=lists:keydelete(Key, 1, S#state.only1),
-            only2=lists:keydelete(Key, 1, S#state.only2)};
-next_state(S,_R,{call, _, reopen_tree, _A}) ->
+next_state(S,_V,{call, _, update_snapshot, [t1, _]}) ->
+    S#state{snap1 = created};
+next_state(S,_V,{call, _, update_snapshot, [t2, _]}) ->
+    S#state{snap2 = created};
+next_state(S,_V,{call, _, update_perform, [t1]}) ->
+    S#state{snap1 = updated};
+next_state(S,_V,{call, _, update_perform, [t2]}) ->
+    S#state{snap2 = updated};
+next_state(S,_V,{call, _, set_next_rebuild, [t1]}) ->
+    S#state{snap1 = undefined};
+next_state(S,_V,{call, _, set_next_rebuild, [t2]}) ->
+    S#state{snap2 = undefined};
+next_state(S,_V,{call, _, write, _}) ->
     S;
-next_state(S,_R,{call, _, unsafe_close, _A}) ->
+next_state(S,_R,{call, _, write_both, _}) ->
     S;
-next_state(S,_R,{call, _, rehash_tree, _A}) ->
+next_state(S,_V,{call, _, delete, _}) ->
     S;
-next_state(S,_R,{call, _, reconcile, []}) ->
-    Keys = keymerge(S),
-    S#state{only1 = Keys,
-            only2 = Keys};
-next_state(S,_R,{call, _, update_tree, _A}) ->
+next_state(S,_R,{call, _, delete_both, _}) ->
+    S;
+next_state(S,_R,{call, _, reopen_tree, [t1]}) ->
+    S#state{snap1 = undefined};
+next_state(S,_R,{call, _, reopen_tree, [t2]}) ->
+    S#state{snap2 = undefined};
+next_state(S,_R,{call, _, unsafe_close, [t1]}) ->
+    S#state{snap1 = undefined};
+next_state(S,_R,{call, _, unsafe_close, [t2]}) ->
+    S#state{snap2 = undefined};
+next_state(S,_R,{call, _, rehash_tree, [t1]}) ->
+    S#state{snap1 = undefined};
+next_state(S,_R,{call, _, rehash_tree, [t2]}) ->
+    S#state{snap2 = undefined};
+next_state(S,_R,{call, _, local_compare, []}) ->
     S.
 
 prop_correct() ->
@@ -274,82 +303,55 @@ prop_correct() ->
                     put(t2, undefined),
                     catch ets:delete(t1),
                     catch ets:delete(t2),
-                    {_H,S,Res} = HSR = run_commands(?MODULE,Cmds),
+                    {_H,_S,Res} = HSR = run_commands(?MODULE,Cmds),
+		    %% {Segments, Width, MemLevels} = S#state.params,
                     pretty_commands(?MODULE, Cmds, HSR,
                                     ?WHENFAIL(
                                        begin
+					   eqc:format("=== t1 ===\n~p\n\n", [ets:tab2list(t1)]),
+					   eqc:format("=== s1 ===\n~p\n\n", [ets:tab2list(s1)]),
+					   eqc:format("=== t2 ===\n~p\n\n", [ets:tab2list(t2)]),
+					   eqc:format("=== s2 ===\n~p\n\n", [ets:tab2list(s2)]),
                                            catch hashtree:destroy(hashtree:close(get(t1))),
                                            catch hashtree:destroy(hashtree:close(get(t2)))
                                        end,
-                            begin
-                                    Unique1 = S#state.only1 -- S#state.only2,
-                                    Unique2 = S#state.only2 -- S#state.only1,
-                                    Expected =  [{missing, Key} || {Key, _} <-
-                                        Unique2, not
-                                        lists:keymember(Key, 1, S#state.only1)] ++
-                                    [{remote_missing, Key} || {Key, _} <-
-                                        Unique1, not
-                                        lists:keymember(Key, 1, S#state.only2)] ++
-                                    [{different, Key} || Key <-
-                                        sets:to_list(sets:intersection(sets:from_list([Key
-                                                        || {Key,_} <- Unique1]),
-                                                sets:from_list([Key || {Key,_}
-                                                    <- Unique2])))],
+				       equals(ok, Res)))
+		end)).
 
-                                case S#state.started of
-                                    false ->
-                                        true;
-                                    _ ->
-                                        %% io:format("\nFinal update tree1:\n"),
-                                        T10 = hashtree:update_tree(get(t1)),
-                                        %% io:format("\nFinal update tree2:\n"),
-                                        T20 = hashtree:update_tree(get(t2)),
+%% dump(Tree) ->
+%%     Fun = fun(Entries) ->
+%%                   Entries
+%%           end,
+%%     {SnapTree, _Tree2} = hashtree:update_snapshot(Tree),
+%%     hashtree:multi_select_segment(SnapTree, ['*','*'], Fun).
 
-                                        %% io:format("\nFinal compare:\n"),
-                                        KeyDiff = hashtree:local_compare(T10, T20),
+%% keymerge(S) ->
+%%     keymerge(S#state.only1, S#state.only2).
 
-                                        D1 = try dump(T10) catch _:Err1 -> Err1 end,
-                                        D2 = try dump(T20) catch _:Err2 -> Err2 end,
+%% keymerge(SuccList, L) ->
+%%     lists:ukeymerge(1, lists:ukeysort(1, SuccList),
+%%                     lists:ukeysort(1, L)).
 
-                                        T11 = hashtree:mark_clean_close({0,0}, T10),
-                                        T21 = hashtree:mark_clean_close({0,0}, T20),
-                                        catch hashtree:destroy(hashtree:close(T11)),
-                                        catch hashtree:destroy(hashtree:close(T21)),
-                                        {Segments, Width, MemLevels} = S#state.params,
 
-                                        ?WHENFAIL(
-                                           begin
-                                               eqc:format("only1:\n~p\n", [S#state.only1]),
-                                               eqc:format("only2:\n~p\n", [S#state.only2]),
-                                               eqc:format("t1:\n~p\n", [D1]),
-                                               eqc:format("t2:\n~p\n", [D2])
-                                           end,
-                                           collect(with_title(mem_levels), MemLevels,
-                                           collect(with_title(segments), Segments,
-                                           collect(with_title(width), Width,
-                                           collect(with_title(length),
-                                           length(S#state.only1) + length(S#state.only2),
-                                                   conjunction([{cmds, equals(ok, Res)},
-                                                                {diff, equals(lists:usort(Expected),
-                                                                              lists:usort(KeyDiff))}]))))))
-                                end
-                            end
-                                ))
-                        end)).
+expect_compare() ->
+    Snap1 = orddict:from_list(ets:tab2list(s1)),
+    Snap2 = orddict:from_list(ets:tab2list(s2)),
+    SnapDeltas = riak_ensemble_util:orddict_delta(Snap1, Snap2),
+    DeltaKeys = [K || {K, _} <- SnapDeltas],
+    Filter = fun(K, _H) ->
+		     lists:member(K, DeltaKeys)
+	     end,
+    F1 = orddict:filter(Filter, orddict:from_list(ets:tab2list(t1))),
+    F2 = orddict:filter(Filter, orddict:from_list(ets:tab2list(t2))),
+    Deltas = riak_ensemble_util:orddict_delta(F1, F2),
+    lists:sort(
+      [{missing, K} || {K, {'$none', _}} <- Deltas] ++
+	  [{remote_missing, K} || {K, {_, '$none'}} <- Deltas] ++
+          [{different, K} || {K, {V1, V2}} <- Deltas, V1 /= '$none', V2 /= '$none']).
+	
+ets_new(T) ->
+    ets:new(T, [named_table, public, set]).
 
-dump(Tree) ->
-    Fun = fun(Entries) ->
-                  Entries
-          end,
-    {SnapTree, _Tree2} = hashtree:update_snapshot(Tree),
-    hashtree:multi_select_segment(SnapTree, ['*','*'], Fun).
-
-keymerge(S) ->
-    keymerge(S#state.only1, S#state.only2).
-
-keymerge(SuccList, L) ->
-    lists:ukeymerge(1, lists:ukeysort(1, SuccList),
-                    lists:ukeysort(1, L)).
 
 -endif.
 -endif.
