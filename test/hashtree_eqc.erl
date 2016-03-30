@@ -142,7 +142,11 @@ start(Params, T1Mark, T2Mark) ->
 update_snapshot(T, S) ->
     %% Snapshot the hashtree and store both states
     {SS, HT} = hashtree:update_snapshot(get(T)),
-    put(T, HT),
+
+    %% Mark as a full rebuild until the update perfom step happens.
+    HT2 = hashtree:set_next_rebuild(HT, full),
+
+    put(T, HT2),
     put({snap, T}, SS),
     %% Copy the current ets table to the snapshot table.
     catch ets:delete(S),
@@ -350,13 +354,13 @@ expect_compare() ->
     Snap1 = orddict:from_list(ets:tab2list(s1)),
     Snap2 = orddict:from_list(ets:tab2list(s2)),
     SnapDeltas = riak_ensemble_util:orddict_delta(Snap1, Snap2),
-    DeltaKeys = [K || {K, {V1, V2}} <- SnapDeltas, V1 /= '$none', V2 /= '$none'],
-    Filter = fun(K, _H) ->
-		     lists:member(K, DeltaKeys)
-	     end,
-    F1 = orddict:filter(Filter, orddict:from_list(ets:tab2list(t1))),
-    F2 = orddict:filter(Filter, orddict:from_list(ets:tab2list(t2))),
-    Deltas = riak_ensemble_util:orddict_delta(F1, F2),
+    %% DeltaKeys = [K || {K, {V1, V2}} <- SnapDeltas, V1 /= '$none', V2 /= '$none'],
+    %% Filter = fun(K, _H) ->
+    %% 		     lists:member(K, DeltaKeys)
+    %% 	     end,
+    %% F1 = orddict:filter(Filter, orddict:from_list(ets:tab2list(t1))),
+    %% F2 = orddict:filter(Filter, orddict:from_list(ets:tab2list(t2))),
+    %% Deltas = riak_ensemble_util:orddict_delta(F1, F2),
 
     %% Missing keys are detected from the snapshots, but different keys are double-checked
     %% against the current hash value to replicate a segment.
@@ -366,7 +370,7 @@ expect_compare() ->
     lists:sort(
       [{missing, K} || {K, {'$none', _}} <- SnapDeltas] ++
 	  [{remote_missing, K} || {K, {_, '$none'}} <- SnapDeltas] ++
-          [{different, K} || {K, {V1, V2}} <- Deltas, V1 /= '$none', V2 /= '$none']).
+          [{different, K} || {K, {V1, V2}} <- SnapDeltas, V1 /= '$none', V2 /= '$none']). %% UNDO SnapDeltas this line
 	
 ets_new(T) ->
     ets:new(T, [named_table, public, set]).
