@@ -136,6 +136,7 @@
 -define(ALL_SEGMENTS, ['*', '*']).
 -define(BIN_TO_INT(B), list_to_integer(binary_to_list(B))).
 
+
 -ifdef(TEST).
 -export([fake_close/1, local_compare/2]).
 -export([run_local/0,

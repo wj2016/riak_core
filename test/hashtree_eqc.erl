@@ -71,12 +71,17 @@ objects() ->
 mark() ->
     frequency([{1, mark_empty}, {5, mark_open}]).
 
+params() -> % {Segments, Width, MemLevels}
+    %% TODO: Re-enable mem levels [{oneof(?POWERS), oneof(?POWERS), choose(0, 4)}
+    %% TODO: {oneof(?POWERS), oneof(?POWERS), 0}.
+    {1024*1024, 1024, 0}.
+
 command(_S = #state{started = false}) ->
-    {call, ?MODULE, start, [{oneof(?POWERS), oneof(?POWERS), choose(0, 4)}, mark(), mark()]};
+    {call, ?MODULE, start, [params(), mark(), mark()]};
 command(_S = #state{started = true, snap1 = Snap1, snap2 = Snap2}) ->
     %% Increase snap frequency once update snapshot has begun
     SS = Snap1 /= undefined orelse Snap2 /= undefined,
-    SF = case SS of true -> 100; _ -> 1 end,
+    SF = case SS of true -> 10; _ -> 1 end,
     frequency(
 	[{ SF, {call, ?MODULE, update_snapshot,  [t1, s1]}} || Snap1 == undefined] ++
 	[{ SF, {call, ?MODULE, update_perform,   [t1]}} || Snap1 == created] ++
@@ -85,12 +90,12 @@ command(_S = #state{started = true, snap1 = Snap1, snap2 = Snap2}) ->
 	[{ SF, {call, ?MODULE, update_perform,   [t2]}} || Snap2 == created] ++
 	[{ SF, {call, ?MODULE, set_next_rebuild, [t2]}} || Snap2 == updated] ++
         [{10*SF, {call, ?MODULE, local_compare, []}} || Snap1 == updated, Snap2 == updated] ++
-        [{101-SF, {call, ?MODULE, write, [t1, objects()]}},
-	 {101-SF, {call, ?MODULE, write, [t2, objects()]}},
-         {101-SF, {call, ?MODULE, write_both, [objects()]}},
-         {101-SF, {call, ?MODULE, delete, [t1, key()]}},
-         {101-SF, {call, ?MODULE, delete, [t2, key()]}},
-         {101-SF, {call, ?MODULE, delete_both, [key()]}},
+        [{11-SF, {call, ?MODULE, write, [t1, objects()]}},
+	 {11-SF, {call, ?MODULE, write, [t2, objects()]}},
+         {11-SF, {call, ?MODULE, write_both, [objects()]}},
+         {11-SF, {call, ?MODULE, delete, [t1, key()]}},
+         {11-SF, {call, ?MODULE, delete, [t2, key()]}},
+         {11-SF, {call, ?MODULE, delete_both, [key()]}},
          {  1, {call, ?MODULE, reopen_tree, [t1]}},
          {  1, {call, ?MODULE, reopen_tree, [t2]}},
          {  1, {call, ?MODULE, unsafe_close, [t1]}},
@@ -218,6 +223,8 @@ unsafe_close(T) ->
     ok.
 
 local_compare() ->
+    put(t1, hashtree:flush_buffer(get(t1))),
+    put(t2, hashtree:flush_buffer(get(t2))),
     hashtree:local_compare(get(t1), get(t2)).
 
 precondition(#state{started = false}, {call, _, F, _A}) ->
@@ -303,27 +310,33 @@ prop_correct() ->
                     put(t2, undefined),
                     catch ets:delete(t1),
                     catch ets:delete(t2),
-                    {_H,_S,Res} = HSR = run_commands(?MODULE,Cmds),
+                    {_H,S,Res} = HSR = run_commands(?MODULE,Cmds),
 		    %% {Segments, Width, MemLevels} = S#state.params,
                     pretty_commands(?MODULE, Cmds, HSR,
                                     ?WHENFAIL(
                                        begin
+					   {Segments, Width, MemLevels} = S#state.params,
+					   eqc:format("Segments ~p\nWidth ~p\nMemLevels ~p\n",
+						      [Segments, Width, MemLevels]),
 					   eqc:format("=== t1 ===\n~p\n\n", [ets:tab2list(t1)]),
 					   eqc:format("=== s1 ===\n~p\n\n", [ets:tab2list(s1)]),
 					   eqc:format("=== t2 ===\n~p\n\n", [ets:tab2list(t2)]),
 					   eqc:format("=== s2 ===\n~p\n\n", [ets:tab2list(s2)]),
+					   eqc:format("=== ht1 ===\n~w\n~p\n\n", [get(t1), catch dump(get(t1))]),
+					   eqc:format("=== ht2 ===\n~w\n~p\n\n", [get(t2), catch dump(get(t2))]),
+					   
                                            catch hashtree:destroy(hashtree:close(get(t1))),
                                            catch hashtree:destroy(hashtree:close(get(t2)))
                                        end,
 				       equals(ok, Res)))
 		end)).
 
-%% dump(Tree) ->
-%%     Fun = fun(Entries) ->
-%%                   Entries
-%%           end,
-%%     {SnapTree, _Tree2} = hashtree:update_snapshot(Tree),
-%%     hashtree:multi_select_segment(SnapTree, ['*','*'], Fun).
+dump(Tree) ->
+    Fun = fun(Entries) ->
+                  Entries
+          end,
+    {SnapTree, _Tree2} = hashtree:update_snapshot(Tree),
+    hashtree:multi_select_segment(SnapTree, ['*','*'], Fun).
 
 %% keymerge(S) ->
 %%     keymerge(S#state.only1, S#state.only2).
@@ -337,16 +350,22 @@ expect_compare() ->
     Snap1 = orddict:from_list(ets:tab2list(s1)),
     Snap2 = orddict:from_list(ets:tab2list(s2)),
     SnapDeltas = riak_ensemble_util:orddict_delta(Snap1, Snap2),
-    DeltaKeys = [K || {K, _} <- SnapDeltas],
+    DeltaKeys = [K || {K, {V1, V2}} <- SnapDeltas, V1 /= '$none', V2 /= '$none'],
     Filter = fun(K, _H) ->
 		     lists:member(K, DeltaKeys)
 	     end,
     F1 = orddict:filter(Filter, orddict:from_list(ets:tab2list(t1))),
     F2 = orddict:filter(Filter, orddict:from_list(ets:tab2list(t2))),
     Deltas = riak_ensemble_util:orddict_delta(F1, F2),
+
+    %% Missing keys are detected from the snapshots, but different keys are double-checked
+    %% against the current hash value to replicate a segment.
+
+    %% Have to task into account flushing the buffer... sigh, so messy. temporarily fix with flush before local compare.
+    %% Wonder if the AAE lookup functions should come from the snapshot.
     lists:sort(
-      [{missing, K} || {K, {'$none', _}} <- Deltas] ++
-	  [{remote_missing, K} || {K, {_, '$none'}} <- Deltas] ++
+      [{missing, K} || {K, {'$none', _}} <- SnapDeltas] ++
+	  [{remote_missing, K} || {K, {_, '$none'}} <- SnapDeltas] ++
           [{different, K} || {K, {V1, V2}} <- Deltas, V1 /= '$none', V2 /= '$none']).
 	
 ets_new(T) ->
