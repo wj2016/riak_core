@@ -17,6 +17,28 @@
 %% under the License.
 %%
 %% -------------------------------------------------------------------
+%%
+%% Hashtree EQC test.  
+%%
+%% Generates a pair of logically identical AAE trees populated with data
+%% and some phantom trees in the same leveldb database to exercise all
+%% of the cases in iterate.
+%%
+%% Then runs commands to insert, delete, snapshot, update tree
+%% and compare.
+%%
+%% The expected values are stored in two ETS tables t1 and t2,
+%% with the most recently snapshotted values copied to tables s1 and s2.
+%% (the initial common seed data is not included in the ETS tables).
+%%
+%% The hashtree's themselves are stored in the process dictionary under
+%% key t1 and t2.  This helps with shrinking as it reduces dependencies
+%% between states (or at least that's why I remember doing it).
+%%
+%% Model state stores where each tree is through the snapshot/update cycle.
+%% The command frequencies are deliberately manipulated to make it more
+%% likely that compares will take place once both trees are updated.
+%%
 
 -module(hashtree_eqc).
 -compile([export_all]).
@@ -33,19 +55,37 @@
 -include_lib("eunit/include/eunit.hrl").
 
 hashtree_test_() ->
-    {timeout, 60,
-        fun() ->
-                ?assert(eqc:quickcheck(?QC_OUT(eqc:testing_time(29,
-                            hashtree_eqc:prop_correct()))))
-        end
-    }.
+    {setup,
+     fun() ->
+             application:set_env(lager, handlers, [{lager_console_backend, info}]),
+             application:ensure_started(syntax_tools),
+             application:ensure_started(compiler),
+             application:ensure_started(goldrush),
+             application:ensure_started(lager)
+     end,
+     fun(_) ->
+             application:stop(lager),
+             application:stop(goldrush),
+             application:stop(compiler),
+             application:stop(syntax_tools),
+             application:unload(lager)
+     end,
+     [{timeout, 60,
+       fun() ->
+              
+              lager:info("Any warnings should be investigated.  No lager output expected.\n"),
+              ?assert(eqc:quickcheck(?QC_OUT(eqc:testing_time(29,
+                                                              hashtree_eqc:prop_correct()))))
+      end
+      }]}.
 
 -record(state,
     {
-      started = false,
+      started = false,    % Boolean to prevent commands running before initialization step.
       params = undefined, % {Segments, Width, MemLevels}
       snap1 = undefined,  % undefined, created, updated
-      snap2 = undefined   % undefined, created, updated
+      snap2 = undefined,  % undefined, created, updated
+      num_updates = 0     % number of insert/delete operations
     }).
 
 integer_to_binary(Int) ->
@@ -68,67 +108,99 @@ object() ->
 objects() ->
     non_empty(list(object())).
 
+params() -> % {Segments, Width, MemLevels}
+    %% Generate in terms of number of levels, from that work out the segments
+    ?LET({Levels, Width, MemLevels},{choose(1,3), oneof(?POWERS), choose(0, 4)},
+         {trunc(math:pow(Width, Levels)), Width, MemLevels}).
+    %% Default for new()
+    %% {1024*1024, 1024, 0}.
+    %% TODO: Re-enable mem levels [{oneof(?POWERS), oneof(?POWERS), choose(0, 4)}
+
+
+
 mark() ->
     frequency([{1, mark_empty}, {5, mark_open}]).
 
-params() -> % {Segments, Width, MemLevels}
-    %% TODO: Re-enable mem levels [{oneof(?POWERS), oneof(?POWERS), choose(0, 4)}
-    %% TODO: {oneof(?POWERS), oneof(?POWERS), 0}.
-    {1024*1024, 1024, 0}.
+seed_data() ->
+    list(oneof([object(),
+		{key(), delete}])).
+
+ids() ->
+    non_empty(list({?LET(X, nat(), 1+X), ?LET(X,nat(), min(X,255))})).
 
 command(_S = #state{started = false}) ->
-    {call, ?MODULE, start, [params(), mark(), mark()]};
-command(_S = #state{started = true, snap1 = Snap1, snap2 = Snap2}) ->
+    {call, ?MODULE, start, [params(), ids(), mark(), mark(), seed_data()]};
+command(_S = #state{started = true, params = {_Segments, _Width, MemLevels},
+                    snap1 = Snap1, snap2 = Snap2}) ->
     %% Increase snap frequency once update snapshot has begun
     SS = Snap1 /= undefined orelse Snap2 /= undefined,
     SF = case SS of true -> 10; _ -> 1 end,
     frequency(
-	[{ SF, {call, ?MODULE, update_snapshot,  [t1, s1]}} || Snap1 == undefined] ++
-	[{ SF, {call, ?MODULE, update_perform,   [t1]}} || Snap1 == created] ++
+      %% Update snapshots/trees. If memory is enabled must test with update_tree
+      %% If not, can use the method used by kv/yz_index_hashtree and separate
+      %% the two steps, dumping the result from update_perform.
+	[{ SF, {call, ?MODULE, update_tree,  [t1, s1]}} || Snap1 == undefined] ++
+	[{ SF, {call, ?MODULE, update_snapshot,  [t1, s1]}} || Snap1 == undefined, MemLevels == 0] ++
+	[{ SF, {call, ?MODULE, update_perform,   [t1]}} || Snap1 == created, MemLevels == 0] ++
 	[{ SF, {call, ?MODULE, set_next_rebuild, [t1]}} || Snap1 == updated] ++
-	[{ SF, {call, ?MODULE, update_snapshot,  [t2, s2]}} || Snap2 == undefined] ++
-	[{ SF, {call, ?MODULE, update_perform,   [t2]}} || Snap2 == created] ++
+	[{ SF, {call, ?MODULE, update_tree,  [t2, s2]}} || Snap1 == undefined] ++
+	[{ SF, {call, ?MODULE, update_snapshot,  [t2, s2]}} || Snap2 == undefined, MemLevels == 0] ++
+	[{ SF, {call, ?MODULE, update_perform,   [t2]}} || Snap2 == created, MemLevels == 0] ++
 	[{ SF, {call, ?MODULE, set_next_rebuild, [t2]}} || Snap2 == updated] ++
+
+      %% Can only run compares when both snapshots are updated.  Boost the frequency
+      %% when both are snapshotted (note this is guarded by both snapshot being updatable)
         [{10*SF, {call, ?MODULE, local_compare, []}} || Snap1 == updated, Snap2 == updated] ++
+
+      %% Modify the data in the two tables
         [{11-SF, {call, ?MODULE, write, [t1, objects()]}},
 	 {11-SF, {call, ?MODULE, write, [t2, objects()]}},
          {11-SF, {call, ?MODULE, write_both, [objects()]}},
          {11-SF, {call, ?MODULE, delete, [t1, key()]}},
          {11-SF, {call, ?MODULE, delete, [t2, key()]}},
          {11-SF, {call, ?MODULE, delete_both, [key()]}},
+
+      %% Mess around with reopening, crashing and rehashing.
          {  1, {call, ?MODULE, reopen_tree, [t1]}},
-         {  1, {call, ?MODULE, reopen_tree, [t2]}},
-         {  1, {call, ?MODULE, unsafe_close, [t1]}},
-         {  1, {call, ?MODULE, unsafe_close, [t2]}},
-         {  1, {call, ?MODULE, rehash_tree, [t1]}},
-	 {  1, {call, ?MODULE, rehash_tree, [t2]}}]
+         {  1, {call, ?MODULE, reopen_tree, [t2]}}
+         %% {  1, {call, ?MODULE, unsafe_close, [t1]}},
+         %% {  1, {call, ?MODULE, unsafe_close, [t2]}},
+         %% {  1, {call, ?MODULE, rehash_tree, [t1]}},
+	 %% {  1, {call, ?MODULE, rehash_tree, [t2]}}
+	]
     ).
 
 
-start(Params, T1Mark, T2Mark) ->
+start(Params, [Id | ExtraIds], T1Mark, T2Mark, SeedData) ->
     {Segments, Width, MemLevels} = Params,
     %% Return now so we can store symbolic value in procdict in next_state call
-    HT1 = hashtree:new({0,0}, [{segments, Segments},
+    T1 = hashtree:new(Id, [{segments, Segments},
+                           {width, Width},
+                           {mem_levels, MemLevels}]),
+
+    T1A = case T1Mark of
+        mark_empty -> hashtree:mark_open_empty(Id, T1);
+        _ -> hashtree:mark_open_and_check(Id, T1)
+    end,
+
+    T1B = load_seed(SeedData, T1A),
+    add_extra_hashtrees(ExtraIds, T1B),
+
+    put(t1, T1B),
+
+    T2 = hashtree:new(Id, [{segments, Segments},
                                {width, Width},
                                {mem_levels, MemLevels}]),
 
-    T1 = case T1Mark of
-        mark_empty -> hashtree:mark_open_empty({0,0}, HT1);
-        _ -> hashtree:mark_open_and_check({0,0}, HT1)
+    T2A = case T2Mark of
+        mark_empty -> hashtree:mark_open_empty(Id, T2);
+        _ -> hashtree:mark_open_and_check(Id, T2)
     end,
 
-    put(t1, T1),
+    T2B = load_seed(SeedData, T2A),
+    add_extra_hashtrees(ExtraIds, T2B),
 
-    HT2 = hashtree:new({0,0}, [{segments, Segments},
-                               {width, Width},
-                               {mem_levels, MemLevels}]),
-
-    T2 = case T2Mark of
-        mark_empty -> hashtree:mark_open_empty({0,0}, HT2);
-        _ -> hashtree:mark_open_and_check({0,0}, HT2)
-    end,
-
-    put(t2, T2),
+    put(t2, T2B),
 
     %% Make sure ETS is pristine
     catch ets:delete(t1),
@@ -139,6 +211,43 @@ start(Params, T1Mark, T2Mark) ->
     ets_new(t2),
     ok.
 
+%% Load up seed data to pre-populate and make more interesting.
+%% Seed data is not tracked in either the t1/t2 ETS tables
+%% as it is common to both sides so there should only be differences
+%% relative to the base to make more tractable. To make sure
+%% updates don't cause a difference, the keyspace is modified to add
+%% a $ symbol on the end.
+load_seed(SeedData, T) ->
+    lists:foldl(fun({K, delete}, Tacc) ->
+			hashtree:delete(<<K/binary, "$">>, Tacc);
+		   ({K, V}, Tacc) ->
+			hashtree:insert(<<K/binary, "$">>, V, Tacc)
+		end, T, SeedData).
+			   
+
+%% Add some extra tree ids and update the metadata to give
+%% the iterator code a workout on non-matching ids.
+add_extra_hashtrees(ExtraIds, T) ->
+    lists:foldl(fun(ExtraId, Tacc) ->
+			Tacc2 = hashtree:new(ExtraId, Tacc),
+			Tacc3 = hashtree:mark_open_empty(ExtraId, Tacc2),
+			Tacc4 = hashtree:insert(<<"k">>, <<"v">>, Tacc3),
+			hashtree:flush_buffer(Tacc4)
+		end, T, ExtraIds).
+
+%% Snapshot and update the tree in a single step.  This works with memory levels
+%% enabled.
+update_tree(T, S) ->
+    %% Snapshot the hashtree and store both states
+    HT = hashtree:update_tree(get(T)),
+    put(T, HT),
+    %% Copy the current ets table to the snapshot table.
+    copy_tree(T, S),
+    ok.
+
+%% Create a new snapshot and update.  This does not work with
+%% memory levels enabled as update_perform uses the snapshot
+%% state which is dumped.
 update_snapshot(T, S) ->
     %% Snapshot the hashtree and store both states
     {SS, HT} = hashtree:update_snapshot(get(T)),
@@ -149,11 +258,18 @@ update_snapshot(T, S) ->
     put(T, HT2),
     put({snap, T}, SS),
     %% Copy the current ets table to the snapshot table.
+    copy_tree(T, S),
+    ok.
+
+%% Copy the model data from the live to snapshot table for update_tree/update_snapshot 
+copy_tree(T, S) ->
     catch ets:delete(S),
     ets_new(S),
     ets:insert(S, ets:tab2list(T)),
     ok.
 
+
+%% Update the tree and dump the state.
 update_perform(T) ->
     _ = hashtree:update_perform(get({snap, T})),
     erase({snap, T}),
@@ -233,6 +349,10 @@ local_compare() ->
 
 precondition(#state{started = false}, {call, _, F, _A}) ->
     F == start;
+precondition(#state{params = {_, _, MemLevels}, snap1 = Snap1}, {call, _, update_tree, [t1, _]}) ->
+    Snap1 == undefined andalso MemLevels == 0;
+precondition(#state{params = {_, _, MemLevels}, snap2 = Snap2}, {call, _, update_tree, [t2, _]}) ->
+    Snap2 == undefined andalso MemLevels == 0;
 precondition(#state{snap1 = Snap1}, {call, _, update_snapshot, [t1, _]}) ->
     Snap1 == undefined;
 precondition(#state{snap1 = Snap1}, {call, _, update_perform, [t1]}) ->
@@ -251,7 +371,7 @@ precondition(_S, _C) ->
     true.
 
 
-postcondition(_S,{call,_,start, [_, T1Mark, T2Mark]},_R) ->
+postcondition(_S,{call,_,start, [_Params, _ExtraIds, T1Mark, T2Mark, _SeedData]},_R) ->
     NextRebuildT1 = hashtree:next_rebuild(get(t1)),
     NextRebuildT2 = hashtree:next_rebuild(get(t2)),
     case T1Mark of
@@ -268,8 +388,12 @@ postcondition(_S,{call, _, local_compare, _},  Result) ->
 postcondition(_S,{call,_,_,_},_R) ->
     true.
 
-next_state(S,_R,{call, _, start, [Params,_,_]}) ->
-    S#state{started = true, params = Params};
+next_state(S,_R,{call, _, start, [Params,_ExtraIds,_,_,SeedData]}) ->
+    S#state{started = true, params = Params, num_updates = length(SeedData)};
+next_state(S,_V,{call, _, update_tree, [t1, _]}) ->
+    S#state{snap1 = updated};
+next_state(S,_V,{call, _, update_tree, [t2, _]}) ->
+    S#state{snap2 = updated};
 next_state(S,_V,{call, _, update_snapshot, [t1, _]}) ->
     S#state{snap1 = created};
 next_state(S,_V,{call, _, update_snapshot, [t2, _]}) ->
@@ -282,14 +406,14 @@ next_state(S,_V,{call, _, set_next_rebuild, [t1]}) ->
     S#state{snap1 = undefined};
 next_state(S,_V,{call, _, set_next_rebuild, [t2]}) ->
     S#state{snap2 = undefined};
-next_state(S,_V,{call, _, write, _}) ->
-    S;
-next_state(S,_R,{call, _, write_both, _}) ->
-    S;
+next_state(S,_V,{call, _, write, [_T, Objs]}) ->
+    S#state{num_updates = S#state.num_updates + length(Objs)};
+next_state(S,_R,{call, _, write_both, [Objs]}) ->
+    S#state{num_updates = S#state.num_updates + 2*length(Objs)};
 next_state(S,_V,{call, _, delete, _}) ->
-    S;
+    S#state{num_updates = S#state.num_updates + 1};
 next_state(S,_R,{call, _, delete_both, _}) ->
-    S;
+    S#state{num_updates = S#state.num_updates + 2};
 next_state(S,_R,{call, _, reopen_tree, [t1]}) ->
     S#state{snap1 = undefined};
 next_state(S,_R,{call, _, reopen_tree, [t2]}) ->
@@ -306,7 +430,7 @@ next_state(S,_R,{call, _, local_compare, []}) ->
     S.
 
 prop_correct() ->
-    ?FORALL(Cmds,non_empty(commands(?MODULE, #state{})),
+    ?FORALL(Cmds,commands(?MODULE, #state{}),
             aggregate(command_names(Cmds),
                 begin
                     %%io:format(user, "Starting in ~p\n", [self()]),
@@ -315,7 +439,16 @@ prop_correct() ->
                     catch ets:delete(t1),
                     catch ets:delete(t2),
                     {_H,S,Res} = HSR = run_commands(?MODULE,Cmds),
-		    %% {Segments, Width, MemLevels} = S#state.params,
+		    {Segments, Width, MemLevels} = 
+                        case S#state.params of
+                            undefined ->
+                                %% Possible if Cmds just init
+                                %% set segments to 1 to avoid div by zero
+                                {1, undefined, undefined};
+                            Params ->
+                                Params
+                        end,
+                    NumUpdates = S#state.num_updates,
                     pretty_commands(?MODULE, Cmds, HSR,
                                     ?WHENFAIL(
                                        begin
@@ -323,17 +456,30 @@ prop_correct() ->
 					   eqc:format("Segments ~p\nWidth ~p\nMemLevels ~p\n",
 						      [Segments, Width, MemLevels]),
 					   eqc:format("=== t1 ===\n~p\n\n", [ets:tab2list(t1)]),
-					   eqc:format("=== s1 ===\n~p\n\n", [ets:tab2list(s1)]),
+					   eqc:format("=== s1 ===\n~p\n\n", [safe_tab2list(s1)]),
 					   eqc:format("=== t2 ===\n~p\n\n", [ets:tab2list(t2)]),
-					   eqc:format("=== s2 ===\n~p\n\n", [ets:tab2list(s2)]),
+					   eqc:format("=== s2 ===\n~p\n\n", [safe_tab2list(s2)]),
 					   eqc:format("=== ht1 ===\n~w\n~p\n\n", [get(t1), catch dump(get(t1))]),
 					   eqc:format("=== ht2 ===\n~w\n~p\n\n", [get(t2), catch dump(get(t2))]),
 					   
                                            catch hashtree:destroy(hashtree:close(get(t1))),
                                            catch hashtree:destroy(hashtree:close(get(t2)))
                                        end,
-				       equals(ok, Res)))
+                                       measure(num_updates, NumUpdates,
+                                       measure(segment_fill_ratio, NumUpdates / (2 * Segments), % Est of avg fill rate per segment
+				       collect(with_title(mem_levels), MemLevels,
+                                       collect(with_title(segments), Segments,
+                                       collect(with_title(width), Width,
+                                               equals(ok, Res))))))))
 		end)).
+
+safe_tab2list(Id) ->
+    try
+        ets:tab2list(Id)
+    catch
+        _:_ ->
+            undefined
+    end.
 
 dump(Tree) ->
     Fun = fun(Entries) ->
