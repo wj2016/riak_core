@@ -82,6 +82,7 @@ hashtree_test_() ->
 -record(state,
     {
       started = false,    % Boolean to prevent commands running before initialization step.
+      tree_id,            % Tree Id
       params = undefined, % {Segments, Width, MemLevels}
       snap1 = undefined,  % undefined, created, updated
       snap2 = undefined,  % undefined, created, updated
@@ -130,7 +131,8 @@ ids() ->
 
 command(_S = #state{started = false}) ->
     {call, ?MODULE, start, [params(), ids(), mark(), mark(), seed_data()]};
-command(_S = #state{started = true, params = {_Segments, _Width, MemLevels},
+command(_S = #state{started = true, tree_id = TreeId,
+                    params = {_Segments, _Width, MemLevels},
                     snap1 = Snap1, snap2 = Snap2}) ->
     %% Increase snap frequency once update snapshot has begun
     SS = Snap1 /= undefined orelse Snap2 /= undefined,
@@ -161,26 +163,26 @@ command(_S = #state{started = true, params = {_Segments, _Width, MemLevels},
          {11-SF, {call, ?MODULE, delete_both, [key()]}},
 
       %% Mess around with reopening, crashing and rehashing.
-         {  1, {call, ?MODULE, reopen_tree, [t1]}},
-         {  1, {call, ?MODULE, reopen_tree, [t2]}}
-         %% {  1, {call, ?MODULE, unsafe_close, [t1]}},
-         %% {  1, {call, ?MODULE, unsafe_close, [t2]}},
-         %% {  1, {call, ?MODULE, rehash_tree, [t1]}},
-	 %% {  1, {call, ?MODULE, rehash_tree, [t2]}}
+         {  1, {call, ?MODULE, reopen_tree, [t1, TreeId]}},
+         {  1, {call, ?MODULE, reopen_tree, [t2, TreeId]}},
+         {  1, {call, ?MODULE, unsafe_close, [t1, TreeId]}},
+         {  1, {call, ?MODULE, unsafe_close, [t2, TreeId]}},
+         {  1, {call, ?MODULE, rehash_tree, [t1]}},
+	 {  1, {call, ?MODULE, rehash_tree, [t2]}}
 	]
     ).
 
 
-start(Params, [Id | ExtraIds], T1Mark, T2Mark, SeedData) ->
+start(Params, [TreeId | ExtraIds], T1Mark, T2Mark, SeedData) ->
     {Segments, Width, MemLevels} = Params,
     %% Return now so we can store symbolic value in procdict in next_state call
-    T1 = hashtree:new(Id, [{segments, Segments},
-                           {width, Width},
-                           {mem_levels, MemLevels}]),
+    T1 = hashtree:new(TreeId, [{segments, Segments},
+                               {width, Width},
+                               {mem_levels, MemLevels}]),
 
     T1A = case T1Mark of
-        mark_empty -> hashtree:mark_open_empty(Id, T1);
-        _ -> hashtree:mark_open_and_check(Id, T1)
+        mark_empty -> hashtree:mark_open_empty(TreeId, T1);
+        _ -> hashtree:mark_open_and_check(TreeId, T1)
     end,
 
     T1B = load_seed(SeedData, T1A),
@@ -188,13 +190,13 @@ start(Params, [Id | ExtraIds], T1Mark, T2Mark, SeedData) ->
 
     put(t1, T1B),
 
-    T2 = hashtree:new(Id, [{segments, Segments},
+    T2 = hashtree:new(TreeId, [{segments, Segments},
                                {width, Width},
                                {mem_levels, MemLevels}]),
 
     T2A = case T2Mark of
-        mark_empty -> hashtree:mark_open_empty(Id, T2);
-        _ -> hashtree:mark_open_and_check(Id, T2)
+        mark_empty -> hashtree:mark_open_empty(TreeId, T2);
+        _ -> hashtree:mark_open_and_check(TreeId, T2)
     end,
 
     T2B = load_seed(SeedData, T2A),
@@ -209,7 +211,7 @@ start(Params, [Id | ExtraIds], T1Mark, T2Mark, SeedData) ->
     catch ets:delete(s2),
     ets_new(t1),
     ets_new(t2),
-    ok.
+    TreeId.
 
 %% Load up seed data to pre-populate and make more interesting.
 %% Seed data is not tracked in either the t1/t2 ETS tables
@@ -304,25 +306,25 @@ rehash_tree(T) ->
     put(T, hashtree:rehash_tree(get(T))),
     ok.
 
-reopen_tree(T) ->
+reopen_tree(T, TreeId) ->
     HT = hashtree:flush_buffer(get(T)),
     {Segments, Width, MemLevels} = {hashtree:segments(HT), hashtree:width(HT),
                                     hashtree:mem_levels(HT)},
     Path = hashtree:path(HT),
 
     UpdatedHT = hashtree:update_tree(HT),
-    CleanClosedHT = hashtree:mark_clean_close({0,0}, UpdatedHT),
+    CleanClosedHT = hashtree:mark_clean_close(TreeId, UpdatedHT),
     hashtree:close(CleanClosedHT),
 
-    T1 = hashtree:new({0,0}, [{segments, Segments},
+    T1 = hashtree:new(TreeId, [{segments, Segments},
                               {width, Width},
                               {mem_levels, MemLevels},
                               {segment_path, Path}]),
 
-    put(T, hashtree:mark_open_and_check({0,0}, T1)),
+    put(T, hashtree:mark_open_and_check(TreeId, T1)),
     ok.
 
-unsafe_close(T) ->
+unsafe_close(T, TreeId) ->
     HT = get(T),
     {Segments, Width, MemLevels} = {hashtree:segments(HT), hashtree:width(HT),
                                     hashtree:mem_levels(HT)},
@@ -333,12 +335,12 @@ unsafe_close(T) ->
     hashtree:flush_buffer(HT),
     hashtree:fake_close(HT),
 
-    T0 = hashtree:new({0,0}, [{segments, Segments},
+    T0 = hashtree:new(TreeId, [{segments, Segments},
                               {width, Width},
                               {mem_levels, MemLevels},
                               {segment_path, Path}]),
 
-    put(T, hashtree:mark_open_and_check({0,0}, T0)),
+    put(T, hashtree:mark_open_and_check(TreeId, T0)),
 
     ok.
 
@@ -388,8 +390,11 @@ postcondition(_S,{call, _, local_compare, _},  Result) ->
 postcondition(_S,{call,_,_,_},_R) ->
     true.
 
-next_state(S,_R,{call, _, start, [Params,_ExtraIds,_,_,SeedData]}) ->
-    S#state{started = true, params = Params, num_updates = length(SeedData)};
+next_state(S,R,{call, _, start, [Params,_ExtraIds,_,_,SeedData]}) ->
+    %% Start returns the TreeId used, stick in the state
+    %% as no hashtree:tree_id call yet.
+    S#state{started = true, tree_id = R,
+            params = Params, num_updates = length(SeedData)};
 next_state(S,_V,{call, _, update_tree, [t1, _]}) ->
     S#state{snap1 = updated};
 next_state(S,_V,{call, _, update_tree, [t2, _]}) ->
@@ -414,13 +419,13 @@ next_state(S,_V,{call, _, delete, _}) ->
     S#state{num_updates = S#state.num_updates + 1};
 next_state(S,_R,{call, _, delete_both, _}) ->
     S#state{num_updates = S#state.num_updates + 2};
-next_state(S,_R,{call, _, reopen_tree, [t1]}) ->
+next_state(S,_R,{call, _, reopen_tree, [t1, _]}) ->
     S#state{snap1 = undefined};
-next_state(S,_R,{call, _, reopen_tree, [t2]}) ->
+next_state(S,_R,{call, _, reopen_tree, [t2, _]}) ->
     S#state{snap2 = undefined};
-next_state(S,_R,{call, _, unsafe_close, [t1]}) ->
+next_state(S,_R,{call, _, unsafe_close, [t1, _]}) ->
     S#state{snap1 = undefined};
-next_state(S,_R,{call, _, unsafe_close, [t2]}) ->
+next_state(S,_R,{call, _, unsafe_close, [t2, _]}) ->
     S#state{snap2 = undefined};
 next_state(S,_R,{call, _, rehash_tree, [t1]}) ->
     S#state{snap1 = undefined};
