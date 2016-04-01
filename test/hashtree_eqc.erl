@@ -136,31 +136,31 @@ command(_S = #state{started = true, tree_id = TreeId,
                     snap1 = Snap1, snap2 = Snap2}) ->
     %% Increase snap frequency once update snapshot has begun
     SS = Snap1 /= undefined orelse Snap2 /= undefined,
-    SF = case SS of true -> 10; _ -> 1 end,
+    SF = case SS of true -> 100; _ -> 1 end,
     frequency(
       %% Update snapshots/trees. If memory is enabled must test with update_tree
       %% If not, can use the method used by kv/yz_index_hashtree and separate
       %% the two steps, dumping the result from update_perform.
-	[{ SF, {call, ?MODULE, update_tree,  [t1, s1]}} || Snap1 == undefined] ++
-	[{ SF, {call, ?MODULE, update_snapshot,  [t1, s1]}} || Snap1 == undefined, MemLevels == 0] ++
-	[{ SF, {call, ?MODULE, update_perform,   [t1]}} || Snap1 == created, MemLevels == 0] ++
-	[{ SF, {call, ?MODULE, set_next_rebuild, [t1]}} || Snap1 == updated] ++
-	[{ SF, {call, ?MODULE, update_tree,  [t2, s2]}} || Snap1 == undefined] ++
-	[{ SF, {call, ?MODULE, update_snapshot,  [t2, s2]}} || Snap2 == undefined, MemLevels == 0] ++
-	[{ SF, {call, ?MODULE, update_perform,   [t2]}} || Snap2 == created, MemLevels == 0] ++
-	[{ SF, {call, ?MODULE, set_next_rebuild, [t2]}} || Snap2 == updated] ++
+	[{10*SF, {call, ?MODULE, update_tree,  [t1, s1]}} || Snap1 == undefined] ++
+	[{10*SF, {call, ?MODULE, update_snapshot,  [t1, s1]}} || Snap1 == undefined, MemLevels == 0] ++
+	[{10*SF, {call, ?MODULE, update_perform,   [t1]}} || Snap1 == created, MemLevels == 0] ++
+	[{10*SF, {call, ?MODULE, set_next_rebuild, [t1]}} || Snap1 == updated] ++
+	[{10*SF, {call, ?MODULE, update_tree,  [t2, s2]}} || Snap1 == undefined] ++
+	[{10*SF, {call, ?MODULE, update_snapshot,  [t2, s2]}} || Snap2 == undefined, MemLevels == 0] ++
+	[{10*SF, {call, ?MODULE, update_perform,   [t2]}} || Snap2 == created, MemLevels == 0] ++
+	[{10*SF, {call, ?MODULE, set_next_rebuild, [t2]}} || Snap2 == updated] ++
 
       %% Can only run compares when both snapshots are updated.  Boost the frequency
       %% when both are snapshotted (note this is guarded by both snapshot being updatable)
-        [{10*SF, {call, ?MODULE, local_compare, []}} || Snap1 == updated, Snap2 == updated] ++
+        [{100*SF, {call, ?MODULE, local_compare, []}} || Snap1 == updated, Snap2 == updated] ++
 
       %% Modify the data in the two tables
-        [{11-SF, {call, ?MODULE, write, [t1, objects()]}},
-	 {11-SF, {call, ?MODULE, write, [t2, objects()]}},
-         {11-SF, {call, ?MODULE, write_both, [objects()]}},
-         {11-SF, {call, ?MODULE, delete, [t1, key()]}},
-         {11-SF, {call, ?MODULE, delete, [t2, key()]}},
-         {11-SF, {call, ?MODULE, delete_both, [key()]}},
+        [{101-SF, {call, ?MODULE, write, [t1, objects()]}},
+	 {101-SF, {call, ?MODULE, write, [t2, objects()]}},
+         {101-SF, {call, ?MODULE, write_both, [objects()]}},
+         {101-SF, {call, ?MODULE, delete, [t1, key()]}},
+         {101-SF, {call, ?MODULE, delete, [t2, key()]}},
+         {101-SF, {call, ?MODULE, delete_both, [key()]}},
 
       %% Mess around with reopening, crashing and rehashing.
          {  1, {call, ?MODULE, reopen_tree, [t1, TreeId]}},
