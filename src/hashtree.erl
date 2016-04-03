@@ -952,7 +952,8 @@ multi_select_segment(#state{id=Id, itr=Itr}, Segments, F) ->
                _ ->
                    encode(Id, First, <<>>)
            end,
-    IS2 = iterate(iterator_move(Itr, Seek), IS1),
+%% HACK - use iterator_move_impl for now to avoid the first prefetch_stop
+    IS2 = iterate(iterator_move_impl(Itr, Seek), IS1),
     #itr_state{remaining_segments = LeftOver,
                current_segment=LastSegment,
                segment_acc=LastAcc,
@@ -975,9 +976,17 @@ multi_select_segment(#state{id=Id, itr=Itr}, Segments, F) ->
 
 iterator_move(undefined, _Seek) ->
     {error, invalid_iterator};
+%% For testing purposes always call prefetch_stop before seeking to a new location.
+%% If this fixes the issue with eleveldb crashing, we will need to implement in a more sane way
+%% like checking state to see if prefetch is running or not.
+iterator_move(Itr, Seek) when is_binary(Seek) ->
+    iterator_move_impl(Itr, prefetch_stop),
+    iterator_move_impl(Itr, Seek);
 iterator_move(Itr, Seek) ->
-    try
+    iterator_move_impl(Itr, Seek).
 
+iterator_move_impl(Itr, Seek) ->
+    try
         eleveldb:iterator_move(Itr, Seek)
     catch
         _:badarg ->
@@ -1009,7 +1018,7 @@ iterate({error, invalid_iterator}, IS=#itr_state{itr=Itr,
                                remaining_segments=Remaining,
                                segment_acc=[],
                                final_acc=[{CurSeg, F(Acc)} | FinalAcc]},
-            iterate(iterator_move(Itr, Seek), IS2)
+            iterate(iterator_move_impl(Itr, Seek), IS2)
     end;
 iterate({ok, K, V}, IS=#itr_state{itr=Itr,
                                   id=Id,
@@ -1069,7 +1078,8 @@ iterate({ok, K, V}, IS=#itr_state{itr=Itr,
                                remaining_segments=Remaining,
                                final_acc=[{Segment, F(Acc)} | FinalAcc],
                                prefetch=true}, % will be after second move
-            _ = iterator_move(Itr, prefetch_stop), % ignore the pre-fetch,
+%% HACK - prefetch_stop is called once per call to iterator_move w/ Seek as binary, so calling here as well is a waste.
+            %%_ = iterator_move(Itr, prefetch_stop), % ignore the pre-fetch,
             Seek = encode(Id, NextSeg, <<>>),      % and risk wasting a reseek
             iterate(iterator_move(Itr, Seek), IS2);% to get to the next segment
         {Id, _, [NextSeg | Remaining], false} ->
@@ -1085,7 +1095,7 @@ iterate({ok, K, V}, IS=#itr_state{itr=Itr,
             %% ensure the iterator can be reused. The next operation
             %% with this iterator is a seek so no need to be concerned
             %% with the data returned here.
-            _ = iterator_move(Itr, prefetch_stop),
+            %% HACK - always calling prefetch_stop - _ = iterator_move(Itr, prefetch_stop),
             IS#itr_state{prefetch=false};
         {_, _, _, false} ->
             %% Done with traversal
