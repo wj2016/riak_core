@@ -57,6 +57,10 @@
 %% Make it possible to run from '-s hashtree_eqc runfor 60' to run from cmdline
 runfor([DurationMinsStr]) ->
     DurationSecs = 60 * list_to_integer(atom_to_list(DurationMinsStr)),
+    redbug:start("eleveldb:iterator_move -> return", [
+        {time, DurationSecs * 1000 + 1000},
+        {msgs, 100000000},
+        {print_file, "/tmp/eqc.out"}]),
     Res = eqc:quickcheck(eqc:testing_time(DurationSecs, hashtree_eqc:sometimes_correct())),
     init:stop(case Res of true -> 0; _ -> 1 end).
 

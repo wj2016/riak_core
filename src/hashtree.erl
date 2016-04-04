@@ -986,14 +986,11 @@ iterator_move(Itr, Seek) ->
     iterator_move_impl(Itr, Seek).
 
 iterator_move_impl(Itr, Seek) ->
-    io:format(user, "iterator_move_impl(~p, ~p)", [Itr, Seek]),
     try
         Res = eleveldb:iterator_move(Itr, Seek),
-        io:format(user, " -> ~p~n", [Res]),
         Res
     catch
         _Err:badarg ->
-            io:format(user, " -> threw ~p:badarg~n", [_Err]),
             {error, invalid_iterator}
     end.
 
