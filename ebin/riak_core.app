@@ -57,7 +57,6 @@
              riak_core_vnode_worker,
              riak_core_vnode_worker_pool,
              riak_core_web,
-             riak_core_wm_urlmap,
              slide,
              spiraltime,
              supervisor_pre_r14b04,
@@ -70,7 +69,6 @@
                   sasl,
                   crypto,
                   riak_sysmon,
-                  webmachine,
                   os_mon
                  ]},
   {mod, { riak_core_app, []}},

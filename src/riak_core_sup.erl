@@ -47,16 +47,6 @@ start_link() ->
 %% ===================================================================
 
 init([]) ->
-    RiakWebs = case lists:flatten(riak_core_web:bindings(http),
-                                  riak_core_web:bindings(https)) of
-                   [] ->
-                       %% check for old settings, in case app.config
-                       %% was not updated
-                       riak_core_web:old_binding();
-                   Binding ->
-                       Binding
-               end,
-
     Children = lists:flatten(
                  [?CHILD(riak_core_sysmon_minder, worker),
                   ?CHILD(riak_core_stat, worker),
@@ -69,8 +59,7 @@ init([]) ->
                   ?CHILD(riak_core_node_watcher_events, worker),
                   ?CHILD(riak_core_node_watcher, worker),
                   ?CHILD(riak_core_vnode_manager, worker),
-                  ?CHILD(riak_core_gossip, worker),
-                  RiakWebs
+                  ?CHILD(riak_core_gossip, worker)
                  ]),
 
     {ok, {{one_for_one, 10, 10}, Children}}.
